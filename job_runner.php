@@ -70,6 +70,7 @@ namespace JobRunner{
                                                                $job->getName(), '-infinity', '{' . join(',', $prevIds) . '}::bigint[]'
                                          );
                         $prevIds = [ $id ];
+                        print 'here';
                     }else{
                         foreach($v as $j){
                             $id = fetch_value("insert into job_runner_job(name, run_after , depends_on)
