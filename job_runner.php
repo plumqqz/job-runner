@@ -2,20 +2,43 @@
 
 /*
 
-create table job_runner_job(
-  id bigserial primary key,
-  name text not null,
+CREATE TABLE public.job_runner_job
+(
+  id bigserial,
+  name text NOT NULL,
   pos integer,
   subpos integer,
-  run_after timestamptz,
-  depends_on decimal[]  
+  run_after timestamp with time zone,
+  depends_on numeric[],
+  is_done boolean default false,
+  CONSTRAINT job_runner_job_pkey PRIMARY KEY (id)
 );
-create index on job_runner_job(name, run_after);
 
-create table job_runner_job_param(
-  job_runner_job_id bigint primary key references job_runner_job(id),
-  param json
+CREATE INDEX job_runner_job_name_pos_idx
+  ON public.job_runner_job
+  USING btree
+  (name COLLATE pg_catalog."C", pos) where not is_done;
+
+-- Index: public.job_runner_job_name_run_after_idx
+
+-- DROP INDEX public.job_runner_job_name_run_after_idx;
+
+CREATE INDEX job_runner_job_name_run_after_idx
+  ON public.job_runner_job
+  USING btree
+  (name COLLATE pg_catalog."C", run_after) where not is_done;
+
+
+CREATE TABLE public.job_runner_job_param
+(
+  job_runner_job_id bigint NOT NULL,
+  param jsonb,
+  CONSTRAINT job_runner_job_param_pkey PRIMARY KEY (job_runner_job_id),
+  CONSTRAINT job_runner_job_param_job_runner_job_id_fkey FOREIGN KEY (job_runner_job_id)
+      REFERENCES public.job_runner_job (id) MATCH SIMPLE
+      ON UPDATE NO ACTION ON DELETE cascade
 );
+
 
 */
 
@@ -58,6 +81,9 @@ namespace JobRunner{
         }
     }
 
+    class JobReturnValue{
+      public $jobExecutor;
+    }
     class JobExecutor{
         private $jobs = [];
         function add(Job $job){
@@ -85,11 +111,10 @@ namespace JobRunner{
                             $ids[] = $id;
                         }
                     }
-                    if(count($prevIds)==0){
-                        foreach($ids as $id){
-                            exec_query('insert into job_runner_job_param(job_runner_job_id, param) values(?,?)', $id, json_encode($param));
-                        }
+                    foreach($ids as $id){
+                         exec_query('insert into job_runner_job_param(job_runner_job_id, param) values(?,?)', $id, json_encode($param, JSON_FORCE_OBJECT));
                     }
+                    $param = [];
                     $prevIds = $ids;
                     $ids = [];
                 }
@@ -99,20 +124,45 @@ namespace JobRunner{
         function run(){
             while(1){
                 exec_query('begin transaction');
-                $row = fetch_row('select * from job_runner_job jr where jr.run_after<now() and not exists(select * from job_runner_job jr2 where jr2.id=any(jr.depends_on)) for update skip locked');
-                if(!$row){
+                $row = fetch_row('select * from job_runner_job jr where not jr.is_done and jr.run_after<now() and not exists(select * from job_runner_job jr2 where jr2.id=any(jr.depends_on) and not jr2.is_done) for update skip locked');
+
+                if(!count($row)){
                     sleep(3);
+                    continue;
                 }
                 $ref = $this->jobs[$row['name']]->getJobs()[$row['pos']];
-                print_r($ref);
+
                 $fn = null;
                 if(is_array($ref)){
                     $fn = $ref[$row['subpos']];
                 }else{
                     $fn = $ref;
                 }
-                $fn();
-                exec_query('delete from job_runner_job where id=?', $row['id']);
+                $param = [];
+                $arr = $row['depends_on'];
+                foreach(fetch_query("select jp.param 
+                                       from job_runner_job_param jp
+                                      where jp.job_runner_job_id=any(?::text::bigint[])", $arr)
+                        as $fq){
+                    $fq = json_decode($fq['param'],1);
+                    $param = $param+ $fq;
+                }
+
+                $jrv = new JobReturnValue(); $jrv->jobExecutor = $this;
+                $rv = $fn($jrv, $param);
+                if(!$rv){
+                    $rv = [];
+                }elseif(!is_array($rv)){
+                    $rv = [ "result" => $rv ];
+                }
+                $rv = json_encode($rv, JSON_FORCE_OBJECT);
+
+                exec_query("update job_runner_job_param jp
+                              set param = ?::jsonb 
+                           where jp.job_runner_job_id=?",
+                           $rv, $row['id']
+                          );
+                exec_query('update job_runner_job set is_done=true where id=?', $row['id']);
                 exec_query('commit');
             }
         }
@@ -241,7 +291,7 @@ namespace JobRunner{
     }
 
     function fetch_value(){
-      return call_user_func_array( __NAMESPACE__ . '\\fetch_list', func_get_args())[0];
+      return @call_user_func_array( __NAMESPACE__ . '\\fetch_list', func_get_args())[0];
     }
 
 }
