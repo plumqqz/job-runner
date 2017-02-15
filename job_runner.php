@@ -5,6 +5,8 @@
 create table job_runner_job(
   id bigserial primary key,
   name text not null,
+  pos integer,
+  subpos integer,
   run_after timestamptz,
   depends_on decimal[]  
 );
@@ -58,34 +60,61 @@ namespace JobRunner{
 
     class JobExecutor{
         private $jobs = [];
-        function add(Job $job, $param=null){
-            $jobs[$job->getName()] = $job;
+        function add(Job $job){
+            $this->jobs[$job->getName()] = $job;
+        }
+        function submit($jobName, $param = null){
             exec_query('begin transaction');
-                $prevIds = [];
-                foreach($job->getJobs() as $v){
+                $job = $this->jobs[$jobName];
+                $prevIds = []; $ids = [];
+                foreach($job->getJobs() as $k=>$v){
                     if(!is_array($v)){
-                        $id = fetch_value("insert into job_runner_job(name, run_after , depends_on)
-                                                               values(?,    ?,   ?)
+                        $id = fetch_value("insert into job_runner_job(name, run_after, pos, depends_on)
+                                                               values(?,    ?, ?,  ?::bigint[])
                                                                returning id",
-                                                               $job->getName(), '-infinity', '{' . join(',', $prevIds) . '}::bigint[]'
+                                                               $job->getName(), '-infinity', $k, count($prevIds) ? '{' . join(',', $prevIds) . '}' : null
                                          );
-                        $prevIds = [ $id ];
-                        print 'here';
+                        $ids = [ $id ];
                     }else{
-                        foreach($v as $j){
-                            $id = fetch_value("insert into job_runner_job(name, run_after , depends_on)
-                                                                   values(?,    ?,   ?)
+                        foreach($v as $k1 => $j){
+                            $id = fetch_value("insert into job_runner_job(name, run_after, pos, subpos,  depends_on)
+                                                                   values(?,    ?,?,?,   ?::bigint[])
                                                                    returning id",
-                                                                   $job->getName(), '-infinity', '{' . join(',', $prevIds) . '}::bigint[]'
+                                                                   $job->getName(), '-infinity', $k, $k1, count($prevIds) ? '{' . join(',', $prevIds) . '}' : null
                                              );
-                            $prevIds[] = [ $id ];
+                            $ids[] = $id;
                         }
                     }
-
+                    if(count($prevIds)==0){
+                        foreach($ids as $id){
+                            exec_query('insert into job_runner_job_param(job_runner_job_id, param) values(?,?)', $id, json_encode($param));
+                        }
+                    }
+                    $prevIds = $ids;
+                    $ids = [];
                 }
             exec_query('commit');
         }
+
         function run(){
+            while(1){
+                exec_query('begin transaction');
+                $row = fetch_row('select * from job_runner_job jr where jr.run_after<now() and not exists(select * from job_runner_job jr2 where jr2.id=any(jr.depends_on)) for update skip locked');
+                if(!$row){
+                    sleep(3);
+                }
+                $ref = $this->jobs[$row['name']]->getJobs()[$row['pos']];
+                print_r($ref);
+                $fn = null;
+                if(is_array($ref)){
+                    $fn = $ref[$row['subpos']];
+                }else{
+                    $fn = $ref;
+                }
+                $fn();
+                exec_query('delete from job_runner_job where id=?', $row['id']);
+                exec_query('commit');
+            }
         }
     }
 
@@ -125,12 +154,12 @@ namespace JobRunner{
         $sth = $dbh->prepare($qry);
         if(!$sth){
             $err = $dbh->errorInfo(); $err = $err[2];
-            throw new Exception("Cannot prepare query:" . $err);
+            throw new \Exception("Cannot prepare query:" . $err);
         }
 
         if(!$sth->execute($param)){
             $err = $sth->errorInfo(); $err = $err[2];
-            throw new Exception("Cannot exec query:" . $err);
+            throw new \Exception("Cannot exec query:" . $err);
         }
 
         return $cb($sth);
@@ -140,7 +169,7 @@ namespace JobRunner{
       The wrapped supplies the callbach which will fetch all rows and return array
     */
     function fetch_query($query){
-      return call_user_func_array( 'exec_query',
+      return call_user_func_array( __NAMESPACE__ . '\\exec_query',
                                     array_merge(func_get_args(),
                                     [
                                         function($sth){
@@ -153,7 +182,7 @@ namespace JobRunner{
     }
 
     function fetch_row(){
-      return call_user_func_array( 'exec_query',
+      return call_user_func_array( __NAMESPACE__ . '\\exec_query',
                                     array_merge(func_get_args(),
                                     [
                                         function($sth){
@@ -170,11 +199,11 @@ namespace JobRunner{
     }
 
     function fetch_list(){
-      return call_user_func_array( 'exec_query',
+      return call_user_func_array(  __NAMESPACE__ . '\\exec_query' ,
                                     array_merge(func_get_args(),
                                     [
                                         function($sth){
-                                           $res = $sth->fetch(PDO::FETCH_NUM);
+                                           $res = $sth->fetch(\PDO::FETCH_NUM);
 
                                            if($res)
                                               return $res;
@@ -197,7 +226,7 @@ namespace JobRunner{
       }
       $param = array_slice(func_get_args(),0, func_num_args()-1);
       $dbh = getDbh();
-      return call_user_func_array( 'exec_query',
+      return call_user_func_array( __NAMESPACE__ .'\\exec_query',
                                         array_merge($param,
                                         [
                                             function($sth)use($cb){
@@ -212,7 +241,7 @@ namespace JobRunner{
     }
 
     function fetch_value(){
-      return @call_user_func_array( 'fetch_list', func_get_args())[0];
+      return call_user_func_array( __NAMESPACE__ . '\\fetch_list', func_get_args())[0];
     }
 
 }

@@ -12,3 +12,4 @@ $job->submit(function(){ print "Here we are #1\n"; return [ 'result' => 1 ]; })
     ->end();
 $je = new JobRunner\JobExecutor();
 $je->add($job);
+$je->run();
