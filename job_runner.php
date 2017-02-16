@@ -115,8 +115,8 @@ namespace JobRunner{
                                                                $job->getName(), '-infinity', $k, count($prevIds) ? '{' . join(',', $prevIds) . '}' : null
                                          );
                         $ids = [ $id ];
-                        if(isset($param[$k]))
-                            exec_query('insert into job_runner_job_param(job_runner_job_id, param) values(?,?)', $id, json_encode($param[$k]));
+                        if(isset($param))
+                            exec_query('insert into job_runner_job_param(job_runner_job_id, param) values(?,?)', $id, json_encode($param));
                     }else{
                         foreach($v as $k1 => $j){
                             $id = fetch_value("insert into job_runner_job(name, run_after, pos, subpos,  depends_on)
@@ -125,8 +125,8 @@ namespace JobRunner{
                                                                    $job->getName(), '-infinity', $k, $k1, count($prevIds) ? '{' . join(',', $prevIds) . '}' : null
                                              );
                             $ids[] = $id;
-                            if(isset($param[$k][$k1]))
-                                exec_query('insert into job_runner_job_param(job_runner_job_id, param) values(?,?)', $id, json_encode($param[$k][$k1]));
+                            if(isset($param))
+                                exec_query('insert into job_runner_job_param(job_runner_job_id, param) values(?,?)', $id, json_encode($param));
                         }
                     }
                     $prevIds = $ids;
@@ -156,7 +156,7 @@ namespace JobRunner{
                 }else{
                     $fn = $ref;
                 }
-                $param = fetch_value('delete from job_runner_job_param jp where jp.job_runner_job_id=? returning param', $row['id']);
+                $param = fetch_value('select jp.param from job_runner_job_param jp where jp.job_runner_job_id=?', $row['id']);
                 $param = json_decode($param,1);
 
                 $jrv = new JobReturnValue(); $jrv->jobExecutor = $this; $jrv->row = $row;
@@ -164,6 +164,7 @@ namespace JobRunner{
 
                 if(!$jrv->getResubmitInterval()){
                     exec_query('delete from job_runner_job where id=?', $row['id']);
+                    fetch_value('delete from job_runner_job_param jp where jp.job_runner_job_id=?', $row['id']);
                 }else{
                     exec_query('update job_runner_job jp set run_after=run_after + make_interval(secs:=?) where id=?', $jrv->getResubmitInterval(), $row['id']);
                     exec_query('update job_runner_job_param jp set param=? where job_runner_job_id=?', json_encode($rv), $row['id']);

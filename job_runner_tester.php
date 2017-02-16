@@ -2,24 +2,30 @@
 include_once "job_runner.php";
 $job = new JobRunner\Job("consumer#1");
 $job->submit(function($jrv, $p){
-                            print "Here we are #1\n";
-                            if($p){
-                               $jrv->setResubmitInterval(0.05);
-                               return 2;
-                            }  
+                JobRunner\exec_query("update usr set email=?||'@mail.ru' where id=?", $p['user_id'], $p['user_id']);
              })
-    ->submit(function($jrv, $p){ print "Here we are #2\n"; print_r($p);  })
+    ->submit(function($jrv, $p){ 
+                JobRunner\exec_query("update usr set address='#' || ?||' Lenina ul' where id=?", $p['user_id'], $p['user_id']);
+            })
     ->submit([ 
-               function ($jrv, $p) { print "Here we are #3.1\n"; print_r($p); },
-               function ($jrv, $p) { print "Here we are #3.2\n"; print_r($p); }
+               function ($jrv, $p) {
+                    print '---------';
+                    print_r($p);
+                    JobRunner\exec_query("update usr set age=coalesce(age,18)+1 where id=?", $p['user_id']);
+               },
+               function ($jrv, $p) { 
+                    JobRunner\exec_query("update usr set age=coalesce(age,18)+1 where id=?", $p['user_id']);
+               }
             ]
            )
-    ->submit(function($jrv, $p){ print "Here we are #4\n"; print_r($p); })
-    ->submit(function($jrv, $p){ print "Here we are #5\n"; print_r($p); })
+    ->submit(function($jrv, $p){ print "Here we are #4\n"; })
+    ->submit(function($jrv, $p){ print "Here we are #5\n"; })
     ->end();
 $je = new JobRunner\JobExecutor();
 $je->add($job);
-for($i=0;$i<1;$i++)
-    $je->submit("consumer#1", [ [ "user_id" => 122 ] ]
-               );
+for($i=0;$i<20000;$i++){
+    $uid = JobRunner\fetch_value('insert into usr(email) values(\'v\') returning id');
+    $uids = [ "user_id" => $uid ];
+    $je->submit("consumer#1", $uids);
+}
 $je->run();
