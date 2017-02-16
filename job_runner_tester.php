@@ -13,5 +13,6 @@ $job->submit(function($jrv, $p){ print "Here we are #1\n"; print_r($p); return [
     ->end();
 $je = new JobRunner\JobExecutor();
 $je->add($job);
-$je->submit("consumer#1");
+#for($i=0;$i<20000;$i++)
+#    $je->submit("consumer#1");
 $je->run();

@@ -83,6 +83,8 @@ namespace JobRunner{
 
     class JobReturnValue{
       public $jobExecutor;
+      public $toReSubmit;
+      public $delayInterval;
     }
     class JobExecutor{
         private $jobs = [];
@@ -124,7 +126,7 @@ namespace JobRunner{
         function run(){
             while(1){
                 exec_query('begin transaction');
-                $row = fetch_row('select * from job_runner_job jr where not jr.is_done and jr.run_after<now() and not exists(select * from job_runner_job jr2 where jr2.id=any(jr.depends_on) and not jr2.is_done) for update skip locked');
+                $row = fetch_row('select * from job_runner_job jr where not jr.is_done and jr.run_after<now() and not exists(select * from job_runner_job jr2 where jr2.id=any(jr.depends_on) and not jr2.is_done) for update skip locked limit 1');
 
                 if(!count($row)){
                     sleep(3);
@@ -162,7 +164,8 @@ namespace JobRunner{
                            where jp.job_runner_job_id=?",
                            $rv, $row['id']
                           );
-                exec_query('update job_runner_job set is_done=true where id=?', $row['id']);
+                if(!$jrv->toReSubmit)
+                    exec_query('update job_runner_job set is_done=true where id=?', $row['id']);
                 exec_query('commit');
             }
         }
