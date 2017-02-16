@@ -92,9 +92,12 @@ namespace JobRunner{
             $this->jobs[$job->getName()] = $job;
         }
         function submit($jobName, $param = null){
+            if($param && !is_array($param)){
+                throw new JobSubmitException("Job parametes passed to submit must be an array of parameters for each step");
+            }
             exec_query('begin transaction');
                 $job = $this->jobs[$jobName];
-                $prevIds = []; $ids = [];
+                $ids=[]; $prevIds=[];
                 foreach($job->getJobs() as $k=>$v){
                     if(!is_array($v)){
                         $id = fetch_value("insert into job_runner_job(name, run_after, pos, depends_on)
@@ -103,6 +106,8 @@ namespace JobRunner{
                                                                $job->getName(), '-infinity', $k, count($prevIds) ? '{' . join(',', $prevIds) . '}' : null
                                          );
                         $ids = [ $id ];
+                        if(isset($param[$k]))
+                            exec_query('insert into job_runner_job_param(job_runner_job_id, param) values(?,?)', $id, json_encode($param[$k]));
                     }else{
                         foreach($v as $k1 => $j){
                             $id = fetch_value("insert into job_runner_job(name, run_after, pos, subpos,  depends_on)
@@ -111,12 +116,10 @@ namespace JobRunner{
                                                                    $job->getName(), '-infinity', $k, $k1, count($prevIds) ? '{' . join(',', $prevIds) . '}' : null
                                              );
                             $ids[] = $id;
+                            if(isset($param[$k][$k1]))
+                                exec_query('insert into job_runner_job_param(job_runner_job_id, param) values(?,?)', $id, json_encode($param[$k][$k1]));
                         }
                     }
-                    foreach($ids as $id){
-                         exec_query('insert into job_runner_job_param(job_runner_job_id, param) values(?,?)', $id, json_encode($param, JSON_FORCE_OBJECT));
-                    }
-                    $param = [];
                     $prevIds = $ids;
                     $ids = [];
                 }
@@ -126,7 +129,11 @@ namespace JobRunner{
         function run(){
             while(1){
                 exec_query('begin transaction');
-                $row = fetch_row('select * from job_runner_job jr where not jr.is_done and jr.run_after<now() and not exists(select * from job_runner_job jr2 where jr2.id=any(jr.depends_on) and not jr2.is_done) for update skip locked limit 1');
+                $row = fetch_row(
+                'select * from job_runner_job jr where not jr.is_done and jr.run_after<now() and not exists(select * from job_runner_job jr2, unnest(jr.depends_on) jdo(id) where jr2.id=jdo.id::bigint and not jr2.is_done limit 1) 
+                for update skip locked 
+                limit 1'
+                );
 
                 if(!count($row)){
                     sleep(3);
@@ -140,32 +147,14 @@ namespace JobRunner{
                 }else{
                     $fn = $ref;
                 }
-                $param = [];
-                $arr = $row['depends_on'];
-                foreach(fetch_query("select jp.param 
-                                       from job_runner_job_param jp
-                                      where jp.job_runner_job_id=any(?::text::bigint[])", $arr)
-                        as $fq){
-                    $fq = json_decode($fq['param'],1);
-                    $param = $param+ $fq;
-                }
+                $param = fetch_value('delete from job_runner_job_param jp where jp.job_runner_job_id=? returning param', $row['id']);
+                $param = json_decode($param,1);
 
                 $jrv = new JobReturnValue(); $jrv->jobExecutor = $this;
-                $rv = $fn($jrv, $param);
-                if(!$rv){
-                    $rv = [];
-                }elseif(!is_array($rv)){
-                    $rv = [ "result" => $rv ];
-                }
-                $rv = json_encode($rv, JSON_FORCE_OBJECT);
+                $fn($jrv, $param);
 
-                exec_query("update job_runner_job_param jp
-                              set param = ?::jsonb 
-                           where jp.job_runner_job_id=?",
-                           $rv, $row['id']
-                          );
                 if(!$jrv->toReSubmit)
-                    exec_query('update job_runner_job set is_done=true where id=?', $row['id']);
+                    exec_query('delete from job_runner_job where id=?', $row['id']);
                 exec_query('commit');
             }
         }
