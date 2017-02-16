@@ -4,13 +4,15 @@
 
 CREATE TABLE public.job_runner_job
 (
-  id bigserial,
+  id bigint NOT NULL DEFAULT nextval('job_runner_job_id_seq'::regclass),
   name text NOT NULL,
   pos integer,
   subpos integer,
   run_after timestamp with time zone,
   depends_on numeric[],
-  is_done boolean default false,
+  is_broken boolean DEFAULT false,
+  last_run timestamp with time zone,
+  last_error text,
   CONSTRAINT job_runner_job_pkey PRIMARY KEY (id)
 );
 
@@ -129,6 +131,9 @@ namespace JobRunner{
                                 exec_query('insert into job_runner_job_param(job_runner_job_id, param) values(?,?)', $id, json_encode($param));
                         }
                     }
+                    foreach($prevIds as $id){
+                        exec_query('update job_runner_job jr set dependants=?::bigint[] where id=?', (count($ids) ? '{' . join(',', $ids) . '}' : null), $id);
+                    }
                     $prevIds = $ids;
                     $ids = [];
                 }
@@ -139,9 +144,8 @@ namespace JobRunner{
             while(1){
                 exec_query('begin transaction');
                 $row = fetch_row(
-                'select * from job_runner_job jr where not jr.is_done and jr.run_after<now() and not exists(select * from job_runner_job jr2, unnest(jr.depends_on) jdo(id) where jr2.id=jdo.id::bigint and not jr2.is_done limit 1) 
-                for update skip locked 
-                limit 1'
+                'select * from job_runner_job jr where not jr.is_broken and jr.run_after<now() and not exists(select * from job_runner_job jr2, unnest(jr.depends_on) jdo(id) where jr2.id=jdo.id::bigint limit 1)                      for update skip locked 
+                      limit 1'
                 );
 
                 if(!count($row)){
@@ -156,15 +160,21 @@ namespace JobRunner{
                 }else{
                     $fn = $ref;
                 }
-                $param = fetch_value('select jp.param from job_runner_job_param jp where jp.job_runner_job_id=?', $row['id']);
+                list($param, $next) = fetch_list('select jp.param, jp.next from job_runner_job_param jp where jp.job_runner_job_id=?', $row['id']);
                 $param = json_decode($param,1);
+                $next = json_decode($next,1);
 
                 $jrv = new JobReturnValue(); $jrv->jobExecutor = $this; $jrv->row = $row;
-                $rv = $fn($jrv, $param);
+                $rv = null;
+                try{
+                    $rv = $fn($jrv, $param, $next);
+                }catch(Exception $e){
+                    exec_query('update job_runner_job jr set last_run=now(), last_error=?, is_broken=true where jr.id=?', $e->getMessage(), $row['id']);
+                }
 
                 if(!$jrv->getResubmitInterval()){
+                    exec_query('update job_runner_job_param jp set next=coalesce(next,\'{}\'::jsonb)|| ?::jsonb where jp.job_runner_job_id=any((select jr.dependants from job_runner_job jr where jr.id=?)::bigint[])', json_encode($rv), $row['id']);
                     exec_query('delete from job_runner_job where id=?', $row['id']);
-                    fetch_value('delete from job_runner_job_param jp where jp.job_runner_job_id=?', $row['id']);
                 }else{
                     exec_query('update job_runner_job jp set run_after=run_after + make_interval(secs:=?) where id=?', $jrv->getResubmitInterval(), $row['id']);
                     exec_query('update job_runner_job_param jp set param=? where job_runner_job_id=?', json_encode($rv), $row['id']);
@@ -174,13 +184,19 @@ namespace JobRunner{
         }
     }
 
+    $dbh = null;
     function getDbh(){
-        static $dbh;
+        global $dbh;
         if($dbh)
             return $dbh;
 
-        $dbh = new \PDO('pgsql:host=localhost;port=5433;dbname=work', 'postgres','root');
+        $dbh = new \PDO('pgsql:zhost=localhost;port=5433;dbname=work', 'postgres','root');
         return $dbh;
+    }
+
+    function setDbh($pDbh){
+        global $dbh;
+        $dbh = $pDbh;
     }
     
     /*
