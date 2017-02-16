@@ -48,6 +48,7 @@ namespace JobRunner{
     class Job{
         private $jobs = [];
         private $name;
+        private $param;
 
         function __construct($name){
             $this->name = $name;
@@ -83,9 +84,17 @@ namespace JobRunner{
 
     class JobReturnValue{
       public $jobExecutor;
-      public $toReSubmit;
+      public $resumitInterval = 0;
       public $delayInterval;
+      public $row;
+      public function setResubmitInterval($int){
+        $this->resumitInterval = $int;
+      }
+      public function getResubmitInterval(){
+        return $this->resumitInterval;
+      }
     }
+
     class JobExecutor{
         private $jobs = [];
         function add(Job $job){
@@ -150,11 +159,15 @@ namespace JobRunner{
                 $param = fetch_value('delete from job_runner_job_param jp where jp.job_runner_job_id=? returning param', $row['id']);
                 $param = json_decode($param,1);
 
-                $jrv = new JobReturnValue(); $jrv->jobExecutor = $this;
-                $fn($jrv, $param);
+                $jrv = new JobReturnValue(); $jrv->jobExecutor = $this; $jrv->row = $row;
+                $rv = $fn($jrv, $param);
 
-                if(!$jrv->toReSubmit)
+                if(!$jrv->getResubmitInterval()){
                     exec_query('delete from job_runner_job where id=?', $row['id']);
+                }else{
+                    exec_query('update job_runner_job jp set run_after=run_after + make_interval(secs:=?) where id=?', $jrv->getResubmitInterval(), $row['id']);
+                    exec_query('update job_runner_job_param jp set param=? where job_runner_job_id=?', json_encode($rv), $row['id']);
+                }
                 exec_query('commit');
             }
         }
