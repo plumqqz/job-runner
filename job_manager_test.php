@@ -5,22 +5,25 @@ $je = new JobExecutor();
 $je->setDbh($dbh);
 
 $job = new Job("RUN#1");
-$job->submit(function($param, $ctx){
-                   print "In #1\n";
+$job->submit(function($param, &$ctx){
+                   $ctx['val']=1;
+                   print "In #1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
              })
-    ->submit([ function($param, $ctx){
-                   print "In #2.1\n";        
-                   throw new Exception('lala');
+    ->submit([ function($param, &$ctx){
+                   print "In #2.1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";        
+                   $ctx['val']++;
                },
-               function($param, $ctx){
-                   print "In #2.2\n";
+               function($param, &$ctx){
+                   print "In #2.2 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
+                   $ctx['val']++;
                }
              ]
     )
-    ->submit(function($param, $ctx){
-                   print "In #3\n";
+    ->submit(function($param, &$ctx){
+                   print "In #3 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
+                   $ctx['val']++;
             });
 $je->add($job);
 
-$je->execute("RUN#1", [ "path" => 1 ]);	
+$je->execute("RUN#1", [ "path" => 1, "name"=>'Name' ]);	
 $je->run();
