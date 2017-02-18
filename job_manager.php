@@ -30,6 +30,8 @@ create table step_depends_on(
 )
 */
     class JobSubmitException extends Exception{};
+    class JobExecuteException extends Exception{};
+
     class Job{
         private $steps = [];
         private $name;
@@ -82,7 +84,18 @@ class JobExecutor{
         $this->jobs[$job->getName()] = $job;
     }
 
-    function execute($jobName, $param){
+    function execute($jobName, $param, $ctx = null){
+      if(!is_string($jobName)){
+         throw new JobExecuteException("Passed jobName is not a string");
+      }
+      if(!is_array($param)){
+         throw new JobExecuteException("Passed param is not a string");
+      }
+
+      if($ctx && !is_array($ctx)){
+         throw new JobExecuteException("Passed ctx is not a string");
+      }
+
       ksort($param);
       $tp = $this->tp;
       $hash = md5(serialize($param));
@@ -99,7 +112,7 @@ class JobExecutor{
 
       try{
           $this->exec_query("start transaction");
-            $this->exec_query("insert into {$tp}job(parameters, val, name, hash ) values(?,?,?,?)", json_encode($param), '{}', $jobName, $hash);
+            $this->exec_query("insert into {$tp}job(parameters, val, name, hash ) values(?,?,?,?)", json_encode($param), $ctx ?: '{}', $jobName, $hash);
             $jobId = $this->fetch_value('select last_insert_id()');
             $ids=[]; $prevIds=[];
             $pos=0;
