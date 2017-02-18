@@ -8,7 +8,9 @@ create table job(
    hash varchar(255),
    is_done boolean default false,
    is_failed boolean default false,
-   last_error text
+   last_error text,
+   last_step_finished_at datetime,
+   first_step_started_at datetime
 )
 
 
@@ -27,6 +29,7 @@ create table step_depends_on(
   primary key(job_step_id, depends_on_step_id)
 )
 */
+    class JobSubmitException extends Exception{};
     class Job{
         private $steps = [];
         private $name;
@@ -150,6 +153,10 @@ EOT
             sleep(3);
             continue;
           }
+          $lock=$this->fetch_value('select get_lock(?,0)', 'job-manager-' . $r['id']);
+          if(!$lock){
+            continue;
+          }
           $job = $this->jobs[$r['name']];
           $fn = $job->getSteps()[$r['pos']];
           if(!$fn){
@@ -168,9 +175,12 @@ EOT
           $this->exec_query('start transaction');
           try{
              $this->exec_query('savepoint job_svp');
+             $time = time();
              $rv = $fn($param, $val);
-             $val = json_encode($val);
-             $this->exec_query("update {$tp}job set val=? where id=?", $val, $r['job_id']);
+             $old_val = $this->fetch_value("select j.val from {$tp}job j where id=? for update", $r['job_id']);
+             $old_val = json_decode($old_val,1);
+             $val = json_encode($val+$old_val);
+             $this->exec_query("update {$tp}job set val=?, first_step_started_at=from_unixtime(?), last_step_finished_at=now() where id=?", $val, $time, $r['job_id']);
              if(!$rv){
                 $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
                 $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
@@ -183,6 +193,7 @@ EOT
  
           }
           $this->exec_query('commit');
+		  $this->fetch_value('select release_lock(?)', 'job-manager-' . $r['id']);
         }
     }
 

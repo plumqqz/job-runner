@@ -16,6 +16,9 @@ $job->submit(function($param, &$ctx){
                function($param, &$ctx){
                    print "In #2.2 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
                    $ctx['val']++;
+                   if($ctx['val']<10){
+                      return "CONTINUE";
+                   }
                }
              ]
     )
@@ -25,5 +28,5 @@ $job->submit(function($param, &$ctx){
             });
 $je->add($job);
 
-$je->execute("RUN#1", [ "path" => 1, "name"=>'Name' ]);	
+$je->execute("RUN#1", [ "path" => 1, "name"=>'Name'.time() ]);	
 $je->run();
