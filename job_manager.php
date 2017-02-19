@@ -31,14 +31,96 @@ create table step_depends_on(
 */
     class JobSubmitException extends Exception{};
     class JobExecuteException extends Exception{};
+    class JobLogger{
+       const PANIC = 0;
+       const ERROR = 1;
+       const WARN  = 2;
+       const WARNING = 2;
+       const INFO = 3;
+       const DEBUG = 4;
+       const TRACE = 5;
+
+       private $lastLogFileName = null;
+       private $logFile = null;
+       private $level;
+
+       function __construct($ll){
+            $this->level = $ll;
+       }
+
+       function openFile(){
+            $logFileName = 'job-runner-' . date('Y-m-d') . '.log';
+            if($this->lastLogFileName == $logFileName){
+                return;
+            }
+            if($this->logFile){
+                if(!fclose($this->logFile)){
+                    error_log("Cannot close old log file {$this->lastLogFileName}");
+                }
+            }
+            $this->logFile = fopen(getenv("JOB_RUNNER_LOGDIR") . './' . $logFileName, "a");
+            if(!$this->logFile){
+                error_log("Cannot open log file " . getenv("JOB_RUNNER_LOGDIR") . './' . $logFileName);
+            }
+            $this->lastLogFileName = $logFileName;
+       }
+       function writeToLog($str){
+            $str = preg_replace("/\r?\n|\n\r?/",'\\n',$str);
+            if($this->logFile)
+                fwrite($this->logFile, "$str\n");
+            else{
+                error_log("Log destination file is not opened; error message is $msg");
+            }
+       }
+       function printLine($level, $msg, $opt = null){
+            $this->openFile();
+            $msg = vsprintf($msg, $opt);
+            $outString = 'job-runner [' . date('Y-m-d H-i-s') . "] $level: $msg";
+            $this->writeToLog($outString);
+       }
+       function panic($msg, $opt = null){
+            if($this->level < JobLogger::PANIC)
+                return;
+            $this->printLine('PANIC', $msg, $opt);
+       }
+       function error($msg, $opt = null){
+            if($this->level < JobLogger::ERROR)
+                return;
+            $this->printLine('ERROR', $msg, $opt);
+       }
+       function warn($msg, $opt = null){
+            if($this->level < JobLogger::WARN)
+                return;
+            $this->printLine('WARN', $msg, $opt);
+       }
+       function info($msg, $opt = null){
+            if($this->level < JobLogger::INFO)
+                return;
+            $this->printLine('INFO', $msg, $opt);
+       }
+       function debug($msg, $opt = null){
+            if($this->level < JobLogger::DEBUG)
+                return;
+            $this->printLine('DEBUG', $msg, $opt);
+       }
+       function trace($msg, $opt = null){
+            if($this->level < JobLogger::TRACE)
+                return;
+            $this->printLine('TRACE', $msg, $opt);
+       }
+        
+    }
 
     class Job{
         private $steps = [];
         private $name;
         private $param;
+        private $log;
 
         function __construct($name){
             $this->name = $name;
+            $this->log = new JobLogger(getenv("JOB_RUNNER") ?: JobLogger::TRACE);
+            $this->log->debug(" <{$this->name}> Create new job with name $name");
             return $this;
         }
         function getName(){
@@ -50,15 +132,21 @@ create table step_depends_on(
         }
 
         function submit($param){
+            $this->log->debug(" <{$this->name}> Submit new steps");
             if(is_callable($param)){
+                $this->log->debug(" <{$this->name}> add one step");
                 $this->steps[] = $param;
             }elseif(is_array($param)){
+                $this->log->debug(" <{$this->name}> add array of steps");
                 foreach($param as $p){
-                    if(!is_callable($p))
+                    if(!is_callable($p)){
+                        $this->log->error(" <{$this->name}> found not callable reference in passed array of steps");
                         throw new JobSubmitException("Passed array has non-function element");
+                    }
                 }
                 $this->steps[] = $param;
             }else{
+                $this->log->error(" <{$this->name}> Passed param neither function nor array of functions"); 
                 throw new JobSubmitException("Passed param neither function nor array of functions");
             }
             return $this;
@@ -73,57 +161,79 @@ class JobExecutor{
     private $jobs=[];
     private $tp="";
     private $dbh = null;
+    private $log;
+
+    function __construct(){
+         $this->log = new JobLogger(getenv("JOB_RUNNER") ?: JobLogger::TRACE);
+    }
     function getDbh(){
         return $this->dbh;
     }
 
     function setDbh($pDbh){
+        $this->log->trace("dbh set");
         $this->dbh = $pDbh;
     }
     function add(Job $job){
+        $this->log->info("JobExecutor: add new job {$job->getName()}");
         $this->jobs[$job->getName()] = $job;
     }
 
     function execute($jobName, $param, $ctx = null){
+      $logPrefix = 'JobExecutor#execute[pid=' . getmypid() . ']';
+      $this->log->trace(" $logPrefix <$jobName> Submitted $jobName for execution");
+
       if(!is_string($jobName)){
+         $this->log->error(" $logPrefix <$jobName> Passed jobName $jobName is not a string");
          throw new JobExecuteException("Passed jobName is not a string");
       }
       if(!is_array($param)){
-         throw new JobExecuteException("Passed param is not a string");
+         $this->log->error(" $logPrefix <$jobName> Passed \$param for jobName $jobName is not an array");
+         throw new JobExecuteException("Passed \$param for jobName $jobName is not an array");
       }
 
       if($ctx && !is_array($ctx)){
+         $this->log->error(" $logPrefix <$jobName> Passed \$ctx for jobName $jobName neither null nor array");
          throw new JobExecuteException("Passed ctx is not a string");
       }
 
       ksort($param);
       $tp = $this->tp;
       $hash = md5(serialize($param));
+      $this->log->debug(" $logPrefix <$jobName> params hash is $hash");
 
       if($this->fetch_value("select 1 from {$tp}job j where j.name=? and j.hash=?", $jobName, $hash)){
+         $this->log->info(" $logPrefix <$jobName> Job $jobName with parameters hash equals to $hash already has been executed. Returning");
          return;
       }
       
       $job = $this->jobs[$jobName];
 
       if(!$job){
+         $this->log->error(" $logPrefix <$jobName> Cannot find job $jobName between before supplied jobs");
          throw new Exception("Cannot find job $jobName");
       }
 
       try{
+          $this->log->trace(" $logPrefix <$jobName> Going to insert steps for job");
           $this->exec_query("start transaction");
+            $this->log->trace(" $logPrefix <$jobName> Transaction started");
             $this->exec_query("insert into {$tp}job(parameters, val, name, hash ) values(?,?,?,?)", json_encode($param), $ctx ?: '{}', $jobName, $hash);
             $jobId = $this->fetch_value('select last_insert_id()');
+            $this->log->debug(" $logPrefix <$jobName> row inserted with id=$jobId");
             $ids=[]; $prevIds=[];
             $pos=0;
             foreach($job->getSteps() as $s){
               if(is_callable($s)){
+                  $this->log->trace(" $logPrefix <$jobName> Insert single step");
                   $this->exec_query("insert into {$tp}job_step(job_id, pos, subpos, run_after) values(?,?,null,'2001-01-01')", $jobId, $pos);
                   $cid = $this->fetch_value('select last_insert_id()');
+                  $this->log->trace(" $logPrefix <$jobName> Inserted single step id is $cid");
                   $ids = [ $cid ];
                   foreach($prevIds as $pid){
                   	$this->exec_query("insert into {$tp}job_step_depends_on(job_step_id, depends_on_step_id) values(?,?)", $cid, $pid);
                   }
+                  $this->log->trace(" $logPrefix <$jobName> Dependency rows have been inserted");
               }elseif(is_array($s)){
                   $subpos=0;
                   foreach($s as $s1){
@@ -133,9 +243,11 @@ class JobExecutor{
                      foreach($prevIds as $pid){
                      	$this->exec_query("insert into {$tp}job_step_depends_on(job_step_id, depends_on_step_id) values(?,?)", $cid, $pid);
                      }
+                     $this->log->trace(" $logPrefix <$jobName> Dependency rows have been inserted");
                      $subpos++;
                   }
               }else{
+                 $this->log->trace(" $logPrefix <$jobName> Unknown data found");
                  throw new Exception("Unknown data in job $jobName");
               }
               $prevIds = $ids;
@@ -143,13 +255,17 @@ class JobExecutor{
               $pos++;
             }
           $this->exec_query("commit");
+          $this->log->debug(" $logPrefix <$jobName> Stored into repository");
       }catch(Exception $e){
           $this->exec_query("rollback");
-          throw new Exception("Cannot stope $jobName into repository",0, $e);
+          $this->log->error(" $logPrefix <$jobName> Cannot store job into repository");
+          throw new Exception("Cannot store $jobName into repository",0, $e);
       }
     }
 
     function run(){
+        $logPrefix = 'JobExecutor#run[pid=' . getmypid() . ']';
+        $this->log->debug(" $logPrefix started");
         $tp = $this->tp;
         while(1){
            $r = $this->fetch_row(<<<"EOT"
@@ -162,23 +278,30 @@ class JobExecutor{
                            limit 1
 EOT
                                  );
+          $this->log->debug(" $logPrefix database queried");
           if(!$r){
+            $this->log->debug(" $logPrefix No data, going to sleep and continue");
             sleep(3);
             continue;
           }
+          $this->log->debug(" $logPrefix Got row to execute, trying to hold lock on it");
           $lock=$this->fetch_value('select get_lock(?,0)', 'job-manager-' . $r['id']);
           if(!$lock){
+            $this->log->debug(" $logPrefix Record already locked by other process; will continue");
             continue;
           }
           $job = $this->jobs[$r['name']];
+          $this->log->debug(" $logPrefix Record locked; will do job {$job->getName()}");
           $fn = $job->getSteps()[$r['pos']];
           if(!$fn){
+             $this->log->error(" $logPrefix <{$job->getName()}> Cannot find step {$r['pos']} ");
              throw new Exception("Cannot find step {$r['pos']} for job {$r['name']}");
           }
           if(is_array($fn)){
             $fn = $fn[$r['subpos']];
           }
           if(!$fn){
+             $this->log->error(" $logPrefix <{$job->getName()}> Cannot find step {$r['pos']} ");
              throw new Exception("Cannot find step {$r['pos']} for job {$r['name']}");
           }
 
@@ -190,6 +313,7 @@ EOT
              $this->exec_query('savepoint job_svp');
              $time = time();
              $rv = $fn($param, $val);
+             $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned [$rv] for parameters:{$r['parameters']} context:{$r['val']}");
              $old_val = $this->fetch_value("select j.val from {$tp}job j where id=? for update", $r['job_id']);
              $old_val = json_decode($old_val,1);
              $val = json_encode($val+$old_val);
@@ -197,15 +321,19 @@ EOT
              if(!$rv){
                 $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
                 $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
+                $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
              }
              $this->exec_query('release savepoint job_svp');
+             $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} processed");
           }catch(Exception $e){
+             $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} throws exception " . get_class($e));
              $this->exec_query('rollback to savepoint job_svp');
              $this->exec_query("update {$tp}job_step set is_failed=true where id=?", $r['id']);
              $this->exec_query("update {$tp}job set last_error=?, is_failed=true where id=?", $e->getMessage(), $r['job_id']);
  
           }
           $this->exec_query('commit');
+          $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} completed");
 		  $this->fetch_value('select release_lock(?)', 'job-manager-' . $r['id']);
         }
     }
