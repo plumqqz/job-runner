@@ -13,9 +13,12 @@ $job->submit(function($param, &$ctx){
                    print "In #2.1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";        
                    $ctx['val']++;
                },
-               function($param, &$ctx){
+               function($param, &$ctx, $je){
                    print "In #2.2 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
                    $ctx['val']++;
+                   if($ctx['val']==6){
+                       $je->execute('sendmail', [ 'to' => 'lala@dodo.com', 'subject' => 'Just subject', 'body' => $param['name'] ]); 
+                   }
                    if($ctx['val']<10){
                       return "CONTINUE";
                    }
@@ -27,6 +30,19 @@ $job->submit(function($param, &$ctx){
                    $ctx['val']++;
             });
 $je->add($job);
+
+$sendMailJob = new Job('sendmail');
+$sendMailJob->submit( function($param, &$ctx){
+                          print "********************** Sending mail to {$param['to']}\n";
+                          $ctx['sended']=true;
+                    })
+            ->submit( function($param, &$ctx){
+                      if($ctx['sended']){
+                         print "########################### Sended!\n";
+                      }
+            });
+
+$je->add($sendMailJob);
 
 $je->execute("RUN#1", [ "path" => 1, "name"=>'Name'.time() ]);	
 $je->run();
