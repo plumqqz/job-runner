@@ -16,10 +16,11 @@ $job->submit(function($param, &$ctx){
                function($param, &$ctx, $je){
                    print "In #2.2 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
                    $ctx['val']++;
-                   if($ctx['val']==6){
-                       $je->execute('sendmail', [ 'to' => 'lala@dodo.com', 'subject' => 'Just subject', 'body' => $param['name'] ]); 
+                   if(($ctx['val']%6)==0){
+                       $je->execute('sendmail', [ 'to' => 'lala@dodo.com', 'subject' => 'Just subject', 'body' => $param['name'], 'val'=>$ctx['val'] ]); 
+                       $je->execute('user-payout', [ 'to' => 'user' . $param['name'] ] );
                    }
-                   if($ctx['val']<10){
+                   if($ctx['val']<50){
                       return "CONTINUE";
                    }
                }
@@ -31,12 +32,18 @@ $job->submit(function($param, &$ctx){
             });
 $je->add($job);
 
+$payoutJob = new Job("user-payout");
+$payoutJob->submit( function($param, &$ctx, $je){
+                             print "Payout to user {$param['to']}\n";
+                    });
+$je->add($payoutJob);
+
 $sendMailJob = new Job('sendmail');
 $sendMailJob->submit( function($param, &$ctx){
                           print "********************** Sending mail to {$param['to']}\n";
                           $ctx['sended']=true;
                     })
-            ->submit( function($param, &$ctx){
+            ->submit( function($param, &$ctx, $je){
                       if($ctx['sended']){
                          print "########################### Sended!\n";
                       }

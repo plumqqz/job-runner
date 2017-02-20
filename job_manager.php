@@ -327,6 +327,9 @@ class JobExecutor{
                         $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
                         $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
                      }
+                     if(is_array($rv)){
+                        $this->exec_query("update {$tp}job_step js set run_after=? where js.id=?", $rv['run_after'], $r['id']);
+                     }
                      $this->log->trace("release savepoint");
                      $this->releaseSavepoint();
                      $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} processed");
