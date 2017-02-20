@@ -325,7 +325,8 @@ class JobExecutor{
              $this->setSavepoint();
              $time = time();
              $rv = $fn($decoded_param, $decoded_val, $this);
-             $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned [$rv] for parameters:{$param} context:{$val}");
+             $encoded_val = json_encode($val);
+             $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned $encoded_val for parameters:{$param} context:{$val}");
              $old_val = $this->fetch_value("select j.val from {$tp}job j where id=? for update", $r['job_id']);
              $old_val = json_decode($old_val,1);
              $val = json_encode($decoded_val+$old_val);
@@ -339,6 +340,8 @@ class JobExecutor{
                 $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
                 $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
                 $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
+             }elseif(is_array($rv)){
+                $this->exec_query("update {$tp}job_step js set run_after=coalesce(?, now()) where js.id=?", $rv['run_after'], $r['id']);
              }
              $this->log->trace("release savepoint");
              $this->releaseSavepoint();
@@ -461,7 +464,7 @@ class JobExecutor{
            $this->exec_query('select pg_advisory_xact_lock(?)', crc32($lockName));
            return 1;
         }else{
-           return $this->fetch_value('select get_lock(?,0)', 'job-manager-' . $r['id']);
+           return $this->fetch_value('select get_lock(?,0)', $lockName);
         }
     }
 
@@ -469,7 +472,7 @@ class JobExecutor{
         if($this->dbDriver == 'pgsql'){
            return 1;
         }else{
-           return $this->fetch_value('select release_lock(?)', 'job-manager-' . $r['id']);
+           return $this->fetch_value('select release_lock(?)', $lockName);
         }
     }
     
