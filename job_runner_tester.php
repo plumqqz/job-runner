@@ -9,8 +9,6 @@ $job->submit(function($jrv, $p){
              })
     ->submit(function($jrv, $p, $prev){ 
                 JobRunner\exec_query("update usr set address='#' || ?||' Lenina ul' where id=?", $p['user_id'], $p['user_id']);
-                print_r('------------');
-                print_r($prev);
                 return [ 'result' => $prev['result']+1 ];
             })
     ->submit([ 
@@ -42,9 +40,9 @@ $job->submit(function($jrv, $p){
 $je = new JobRunner\JobExecutor();
 $je->add($job);
 
-$je->run();
-exit;
-for($i=0;$i<1;$i++){
+#$je->run();
+#exit;
+for($i=0;$i<50000;$i++){
     $uid = JobRunner\fetch_value('insert into usr(email) values(\'v\') returning id');
     $uids = [ "user_id" => $uid ];
     $je->submit("consumer#1", $uids);

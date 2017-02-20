@@ -1,6 +1,7 @@
 <?php
 include_once("job_manager.php");
-$dbh = new PDO('mysql:host=localhost;port=3306;dbname=jobs', 'root','');
+#$dbh = new PDO('mysql:host=localhost;port=3306;dbname=jobs', 'root','');
+$dbh = new PDO('pgsql:host=localhost;port=5433;dbname=work', 'postgres','root');
 $je = new JobExecutor();
 $je->setDbh($dbh);
 
