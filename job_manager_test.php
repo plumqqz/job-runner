@@ -10,17 +10,20 @@ $job->submit(function($param, &$ctx){
                    $ctx['val']=1;
                    print "In #1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
              })
-    ->submit([ function($param, &$ctx){
+    ->submit([ /*function($param, &$ctx){
                    print "In #2.1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";        
                    $ctx['val']++;
-               },
+               },*/
                function($param, &$ctx, $je){
-                   print "In #2.2 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
-                   $ctx['val']++;
-                   if($ctx['val']==6){
-                       $je->execute('sendmail', [ 'to' => 'lala@dodo.com', 'subject' => 'Just subject', 'body' => $param['name'] ]); 
+                   print "In #2.2 param[name]={$param['name']} ctx[valx]={$ctx['valx']}\n";
+                   if(!isset($ctx['valx']))
+                     $ctx['valx']=0;
+                   $ctx['valx']++;
+                   if($ctx['valx']==4){
+                      $je->execute('sendmail', [ 'to' => 'lala@dodo.com', 'subject' => 'Just subject', 'body' => $param['name'] ]); 
                    }
-                   if($ctx['val']<10){
+                   $je->exec_query('insert into cnt(val) values(1)');
+                   if($ctx['valx']<114){
                       return "CONTINUE";
                    }
                }

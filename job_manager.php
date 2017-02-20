@@ -272,14 +272,14 @@ class JobExecutor{
         $tp = $this->tp;
         while(1){
            $r = $this->fetch_row("
-                        select j1.*, j.parameters, j.val, j.name
+                        select j1.*, j.name
                           from {$tp}job_step j1, {$tp}job j
                          where not exists(select * from {$tp}job_step_depends_on jsd, {$tp}job_step j2 where jsd.job_step_id=j1.id and jsd.depends_on_step_id=j2.id)
                            and not j1.is_failed 
                            and j1.run_after<now()
                            and j.id=j1.job_id
-                           limit 1"
-                                 );
+                           limit 1" 
+                        );
           $this->log->debug(" $logPrefix database queried");
           if(!$r){
             $this->log->debug(" $logPrefix No data, going to sleep and continue");
@@ -287,13 +287,21 @@ class JobExecutor{
             continue;
           }
           $this->log->debug(" $logPrefix Got row to execute, trying to hold lock on it");
-          #$lock=$this->fetch_value('select get_lock(?,0)', 'job-manager-' . $r['id']);
+
+          $this->setSavepoint();
           $lock=$this->getLock('job-manager-' . $r['id']);
           if(!$lock){
             $this->log->debug(" $logPrefix Record already locked by other process; will continue");
+            $this->releaseSavepoint();
             continue;
           }
+
           $job = $this->jobs[$r['name']];
+          if(!$this->fetch_value("select 1 from {$tp}job_step js where not js.is_failed and js.id=? for update", $r['id'])){
+              $this->log->debug(" $logPrefix Record was processed by another process; will continue");
+              $this->releaseSavepoint();
+              continue;
+          }
           $this->log->debug(" $logPrefix Record locked; will do job {$job->getName()}");
           $fn = $job->getSteps()[$r['pos']];
           if(!$fn){
@@ -308,20 +316,19 @@ class JobExecutor{
              throw new Exception("Cannot find step {$r['pos']} for job {$r['name']}");
           }
 
-          $param = json_decode($r['parameters'],1);
-          $val   = json_decode($r['val'],1);
+          list($param, $val) = $this->fetch_list("select parameters, val from {$tp}job j where j.id=?", $r['job_id']);
+          $decoded_param = json_decode($param,1);
+          $decoded_val   = json_decode($val,1);
 
-          $this->setSavepoint();
-          $svpName = "job_svp_{$this->callCount}";
           try{
              $this->log->trace("set savepoint");
              $this->setSavepoint();
              $time = time();
-             $rv = $fn($param, $val, $this);
-             $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned [$rv] for parameters:{$r['parameters']} context:{$r['val']}");
+             $rv = $fn($decoded_param, $decoded_val, $this);
+             $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned [$rv] for parameters:{$param} context:{$val}");
              $old_val = $this->fetch_value("select j.val from {$tp}job j where id=? for update", $r['job_id']);
              $old_val = json_decode($old_val,1);
-             $val = json_encode($val+$old_val);
+             $val = json_encode($decoded_val+$old_val);
              if($this->dbDriver == 'pgsql'){
                  $this->exec_query("update {$tp}job set val=?, first_step_started_at=to_timestamp(?), last_step_finished_at=now() where id=?", $val, $time, $r['job_id']);
              }else{
@@ -342,7 +349,7 @@ class JobExecutor{
              $this->rollbackToSavepoint();
              $this->exec_query("update {$tp}job_step set is_failed=true where id=?", $r['id']);
              $this->exec_query("update {$tp}job set last_error=?, is_failed=true where id=?", $e->getMessage(), $r['job_id']);
- 
+             continue;
           }
           $this->releaseSavepoint();
           $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} completed");
@@ -477,9 +484,9 @@ class JobExecutor{
     function setSavepoint(){
 
         if($this->txnLevel==0){
-            if($this->dbDriver == 'pgsql')
+            if($this->dbDriver == 'pgsql'){
                 $this->exec_query("begin transaction");
-            else
+            }else
                 $this->exec_query("start transaction");
         }else{
             $this->exec_query("savepoint job_exec_{$this->txnLevel}");
