@@ -330,9 +330,9 @@ class JobExecutor{
              $old_val = json_decode($old_val,1);
              $val = json_encode($decoded_val+$old_val);
              if($this->dbDriver == 'pgsql'){
-                 $this->exec_query("update {$tp}job set val=?, first_step_started_at=to_timestamp(?), last_step_finished_at=now() where id=?", $val, $time, $r['job_id']);
+                 $this->exec_query("update {$tp}job set val=?, first_step_started_at=to_timestamp(?), last_step_finished_at=to_timestamp(?) where id=?", $val, $time, time(), $r['job_id']);
              }else{
-                 $this->exec_query("update {$tp}job set val=?, first_step_started_at=from_unixtime(?), last_step_finished_at=now() where id=?", $val, $time, $r['job_id']);
+                 $this->exec_query("update {$tp}job set val=?, first_step_started_at=from_unixtime(?), last_step_finished_at=from_unixtime(?) where id=?", $val, $time, time(), $r['job_id']);
              }
              if(!$rv){
                 $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
@@ -349,7 +349,6 @@ class JobExecutor{
              $this->rollbackToSavepoint();
              $this->exec_query("update {$tp}job_step set is_failed=true where id=?", $r['id']);
              $this->exec_query("update {$tp}job set last_error=?, is_failed=true where id=?", $e->getMessage(), $r['job_id']);
-             continue;
           }
           $this->releaseSavepoint();
           $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} completed");
