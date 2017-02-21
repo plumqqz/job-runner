@@ -300,6 +300,7 @@ class JobExecutor{
           if(!$this->fetch_value("select 1 from {$tp}job_step js where not js.is_failed and js.id=? for update", $r['id'])){
               $this->log->debug(" $logPrefix Record was processed by another process; will continue");
               $this->releaseSavepoint();
+              $this->releaseLock('job-manager-' . $r['id']);
               continue;
           }
           $this->log->debug(" $logPrefix Record locked; will do job {$job->getName()}");
@@ -355,7 +356,6 @@ class JobExecutor{
           }
           $this->releaseSavepoint();
           $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} completed");
-          #$this->fetch_value('select release_lock(?)', 'job-manager-' . $r['id']);
           $this->releaseLock('job-manager-' . $r['id']);
         }
     }

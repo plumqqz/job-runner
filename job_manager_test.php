@@ -1,7 +1,7 @@
 <?php
 include_once("job_manager.php");
-$dbh = new PDO('mysql:host=localhost;port=3306;dbname=jobs', 'root','');
-#$dbh = new PDO('pgsql:host=localhost;port=5433;dbname=work', 'postgres','root');
+#$dbh = new PDO('mysql:host=localhost;port=3306;dbname=jobs', 'root','');
+$dbh = new PDO('pgsql:host=localhost;port=5433;dbname=work', 'postgres','root');
 $je = new JobExecutor();
 $je->setDbh($dbh);
 
@@ -14,7 +14,7 @@ $job->submit(function($param, &$ctx){
                    print "In #2.1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";        
                    $ctx['val']++;
                    if($ctx['val']<40)
-                        return [ 'run_after' => 'zzqn' ];
+                        return [ 'run_after' => 'now' ];
                    return null;
                },
                function($param, &$ctx, $je){
@@ -51,5 +51,5 @@ $sendMailJob->submit( function($param, &$ctx){
 
 $je->add($sendMailJob);
 
-$je->execute("RUN#1", [ "path" => 1, "name"=>'Name'.time() ]);	
+$je->execute("RUN#1", [ "path" => 1, "name"=>'Name'.time() . getmypid() ]);	
 $je->run();
