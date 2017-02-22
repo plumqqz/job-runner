@@ -1,5 +1,7 @@
 <?php
 /*
+mysql
+
 create table job(
    id bigint auto_increment primary key,
    parameters text,
@@ -28,6 +30,48 @@ create job_table step_depends_on(
   depends_on_step_id bigint not null references job_step(id),
   primary key(job_step_id, depends_on_step_id)
 )
+
+
+Postgres
+CREATE TABLE public.job
+(
+  id bigint NOT NULL DEFAULT nextval('job_id_seq'::regclass),
+  parameters text,
+  val text,
+  name character varying(255),
+  hash character varying(255),
+  is_done boolean DEFAULT false,
+  is_failed boolean DEFAULT false,
+  last_error text,
+  last_step_finished_at timestamp without time zone,
+  first_step_started_at timestamp without time zone,
+  CONSTRAINT job_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.job_step
+(
+  id bigint NOT NULL DEFAULT nextval('job_step_id_seq'::regclass),
+  job_id bigint NOT NULL,
+  pos integer NOT NULL,
+  subpos integer,
+  is_failed boolean DEFAULT false,
+  run_after timestamp without time zone,
+  CONSTRAINT job_step_pkey PRIMARY KEY (id),
+  CONSTRAINT job_step_job_id_fkey FOREIGN KEY (job_id)
+      REFERENCES public.job (id) MATCH SIMPLE
+      ON UPDATE NO ACTION ON DELETE NO ACTION
+);
+CREATE TABLE public.job_step_depends_on
+(
+  job_step_id bigint NOT NULL,
+  depends_on_step_id bigint NOT NULL,
+  CONSTRAINT job_step_depends_on_pkey PRIMARY KEY (job_step_id, depends_on_step_id),
+  CONSTRAINT job_step_depends_on_depends_on_step_id_fkey FOREIGN KEY (depends_on_step_id)
+      REFERENCES public.job_step (id) MATCH SIMPLE
+      ON UPDATE NO ACTION ON DELETE NO ACTION,
+  CONSTRAINT job_step_depends_on_job_step_id_fkey FOREIGN KEY (job_step_id)
+      REFERENCES public.job_step (id) MATCH SIMPLE
+      ON UPDATE NO ACTION ON DELETE NO ACTION
+);
 */
     class JobSubmitException extends Exception{};
     class JobExecuteException extends Exception{};
@@ -119,7 +163,7 @@ create job_table step_depends_on(
 
         function __construct($name){
             $this->name = $name;
-            $this->log = new JobLogger(getenv("JOB_MANAGER_LOGLVL") ?: JobLogger::TRACE);
+            $this->log = new JobLogger(getenv("JOB_MANAGER_LOGLVL") ?: JobLogger::INFO);
             $this->log->debug(" <{$this->name}> Create new job with name $name");
             return $this;
         }
