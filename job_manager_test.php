@@ -38,12 +38,18 @@ $job->submit(function($param, &$ctx){
             });
 $je->add($job);
 
+$payoutJob = new Job("user-payout");
+$payoutJob->submit( function($param, &$ctx, $je){
+                             print "Payout to user {$param['to']}\n";
+                    });
+$je->add($payoutJob);
+
 $sendMailJob = new Job('sendmail');
 $sendMailJob->submit( function($param, &$ctx){
                           print "********************** Sending mail to {$param['to']}\n";
                           $ctx['sended']=true;
                     })
-            ->submit( function($param, &$ctx){
+            ->submit( function($param, &$ctx, $je){
                       if($ctx['sended']){
                          print "########################### Sended!\n";
                       }
