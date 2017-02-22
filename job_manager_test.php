@@ -2,8 +2,8 @@
 include_once("job_manager.php");
 #$dbh = new PDO('mysql:host=localhost;port=3306;dbname=jobs', 'root','');
 $dbh = new PDO('pgsql:host=localhost;port=5433;dbname=work', 'postgres','root');
-$je = new JobExecutor();
-$je->setDbh($dbh);
+$je = new JobExecutor($dbh);
+#$je->setDbh($dbh);
 
 $job = new Job("RUN#1");
 $job->submit(function($param, &$ctx){
@@ -12,9 +12,11 @@ $job->submit(function($param, &$ctx){
              })
     ->submit([ function($param, &$ctx){
                    print "In #2.1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";        
-                   $ctx['val']++;
-                   if($ctx['val']<40)
-                        return [ 'run_after' => 'now' ];
+                   if(!isset($ctx['val1']))
+                     $ctx['val1']=0;
+                   $ctx['val1']++;
+                   if($ctx['val1']<40)
+                        return [ 'run_after' => 1 ];
                    return null;
                },
                function($param, &$ctx, $je){
@@ -26,7 +28,7 @@ $job->submit(function($param, &$ctx){
                       $je->execute('sendmail', [ 'to' => 'lala@dodo.com', 'subject' => 'Just subject', 'body' => $param['name'] ]); 
                    }
                    $je->exec_query('insert into cnt(val) values(1)');
-                   if($ctx['valx']<114){
+                   if($ctx['valx']<6){
                       return "CONTINUE";
                    }
                }

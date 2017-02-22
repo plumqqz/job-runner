@@ -208,8 +208,10 @@ class JobExecutor{
     private $log;
     private $callCount=0;
 
-    function __construct(){
+    function __construct($dbh=null){
          $this->log = new JobLogger(getenv("JOB_MANAGER_LOGLVL") ?: JobLogger::TRACE);
+         if($dbh)
+            $this->setDbh($dbh);
     }
     function getDbh(){
         return $this->dbh;
@@ -386,7 +388,11 @@ class JobExecutor{
                 $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
                 $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
              }elseif(is_array($rv)){
-                $this->exec_query("update {$tp}job_step js set run_after=coalesce(?, now()) where js.id=?", $rv['run_after'], $r['id']);
+                 if($this->dbDriver == 'pgsql'){
+                    $this->exec_query("update {$tp}job_step js set run_after=coalesce(to_timestamp(?), now()) where js.id=?", time()+$rv['run_after'], $r['id']);
+                 }else{
+                    $this->exec_query("update {$tp}job_step js set run_after=coalesce(from_unixtime(?), now()) where js.id=?", time()+$rv['run_after'], $r['id']);
+                 }
              }
              $this->log->trace("release savepoint");
              $this->releaseSavepoint();
