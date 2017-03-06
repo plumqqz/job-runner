@@ -25,7 +25,7 @@ create table job_step(
    run_after datetime
 )
 
-create job_table step_depends_on(
+create table job_step_depends_on(
   job_step_id bigint not null references job_step(id),
   depends_on_step_id bigint not null references job_step(id),
   primary key(job_step_id, depends_on_step_id)
