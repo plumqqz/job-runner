@@ -60,4 +60,5 @@ $sendMailJob->submit( function($param, &$ctx){
 $je->add($sendMailJob);
 
 $je->execute("RUN#1", [ "path" => 1, "name"=>'Name'.time() . getmypid() ]);	
+$onceJob = new Job("once");
 $je->run();

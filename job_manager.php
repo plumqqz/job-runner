@@ -12,7 +12,8 @@ create table job(
    is_failed boolean default false,
    last_error text,
    last_step_finished_at datetime,
-   first_step_started_at datetime
+   first_step_started_at datetime,
+   try_count int default 0
 )
 
 
@@ -22,6 +23,7 @@ create table job_step(
    pos int not null,
    subpos int,
    is_failed boolean default false,
+   run_once boolean default false,
    run_after datetime
 )
 
@@ -45,6 +47,7 @@ CREATE TABLE public.job
   last_error text,
   last_step_finished_at timestamp without time zone,
   first_step_started_at timestamp without time zone,
+  try_count int default 0,
   CONSTRAINT job_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.job_step
@@ -54,6 +57,7 @@ CREATE TABLE public.job_step
   pos integer NOT NULL,
   subpos integer,
   is_failed boolean DEFAULT false,
+  run_once boolean default false,
   run_after timestamp without time zone,
   CONSTRAINT job_step_pkey PRIMARY KEY (id),
   CONSTRAINT job_step_job_id_fkey FOREIGN KEY (job_id)
@@ -157,6 +161,7 @@ CREATE TABLE public.job_step_depends_on
 
     class Job{
         private $steps = [];
+        private $runOnce = [];
         private $name;
         private $param;
         private $log;
@@ -175,11 +180,20 @@ CREATE TABLE public.job_step_depends_on
             return $this->steps;
         }
 
-        function submit($param){
-            $this->log->debug(" <{$this->name}> Submit new steps");
+        function getRunOnce(){
+            return $this->runOnce;
+        }
+
+        function submitOnce($param){
+            return $this->submit($param, true);
+        }
+
+        function submit($param, $isOnce=0){
+            $this->log->debug(" <{$this->name}> Submit new steps; isOnce=$isOnce");
             if(is_callable($param)){
                 $this->log->debug(" <{$this->name}> add one step");
                 $this->steps[] = $param;
+                $this->runOnce[] = $isOnce;
             }elseif(is_array($param)){
                 $this->log->debug(" <{$this->name}> add array of steps");
                 foreach($param as $p){
@@ -189,6 +203,7 @@ CREATE TABLE public.job_step_depends_on
                     }
                 }
                 $this->steps[] = $param;
+                $this->runOnce[] = $isOnce;
             }else{
                 $this->log->error(" <{$this->name}> Passed param neither function nor array of functions"); 
                 throw new JobSubmitException("Passed param neither function nor array of functions");
@@ -201,10 +216,9 @@ CREATE TABLE public.job_step_depends_on
         }
     }
 
-class JobExecutor{
+class JobExecutor extends sqlHelper{
     private $jobs=[];
     private $tp="";
-    private $dbh = null;
     private $log;
     private $callCount=0;
 
@@ -213,16 +227,7 @@ class JobExecutor{
          if($dbh)
             $this->setDbh($dbh);
     }
-    function getDbh(){
-        return $this->dbh;
-    }
 
-    private $dbDriver;
-    function setDbh($pDbh){
-        $this->log->trace("dbh set");
-        $this->dbh = $pDbh;
-        $this->dbDriver = $this->getDbh()->getAttribute(\PDO::ATTR_DRIVER_NAME);
-    }
     function add(Job $job){
         $this->log->info("JobExecutor: add new job {$job->getName()}");
         $this->jobs[$job->getName()] = $job;
@@ -272,10 +277,11 @@ class JobExecutor{
             $this->log->debug(" $logPrefix <$jobName> row inserted with id=$jobId");
             $ids=[]; $prevIds=[];
             $pos=0;
+            print_r($job->getRunOnce());
             foreach($job->getSteps() as $s){
               if(is_callable($s)){
                   $this->log->trace(" $logPrefix <$jobName> Insert single step");
-                  $this->exec_query("insert into {$tp}job_step(job_id, pos, subpos, run_after) values(?,?,null,'2001-01-01')", $jobId, $pos);
+                  $this->exec_query("insert into {$tp}job_step(job_id, pos, subpos, run_after, run_once) values(?,?,null,'2001-01-01',?)", $jobId, $pos, $job->getRunOnce()[$pos]);
                   $cid = $this->lastInsertId("{$tp}job_step_id_seq");
                   $this->log->trace(" $logPrefix <$jobName> Inserted single step id is $cid");
                   $ids = [ $cid ];
@@ -286,7 +292,7 @@ class JobExecutor{
               }elseif(is_array($s)){
                   $subpos=0;
                   foreach($s as $s1){
-                     $this->exec_query("insert into {$tp}job_step(job_id, pos, subpos, run_after) values(?,?,?,'2001-01-01')", $jobId, $pos, $subpos);
+                     $this->exec_query("insert into {$tp}job_step(job_id, pos, subpos, run_after, run_once) values(?,?,?,'2001-01-01',?)", $jobId, $pos, $subpos, $job->getRunOnce()[$pos]);
                      $cid = $this->getDbh()->lastInsertId("{$tp}job_step_id_seq");
                      $ids[] = $cid;
                      foreach($prevIds as $pid){
@@ -409,6 +415,20 @@ class JobExecutor{
           $this->releaseLock('job-manager-' . $r['id']);
         }
     }
+ }
+ class sqlHelper{
+    private $dbh = null;
+    protected $dbDriver;
+
+    function getDbh(){
+        return $this->dbh;
+    }
+
+    function setDbh($pDbh){
+        $this->dbh = $pDbh;
+        $this->dbDriver = $this->getDbh()->getAttribute(\PDO::ATTR_DRIVER_NAME);
+    }
+
 
     /*
       executes specified query with supplied param
