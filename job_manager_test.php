@@ -38,6 +38,10 @@ $job->submit(function($param, &$ctx){
                    print "In #3 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
                    $ctx['val']++;
             });
+$job->setCallback(function($p,&$ctx,$je){
+    if(isset($ctx['val1']))
+      throw new Exception("Broke job!");
+});
 $je->add($job);
 
 $payoutJob = new Job("user-payout");

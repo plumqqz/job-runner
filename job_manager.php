@@ -165,6 +165,7 @@ CREATE TABLE public.job_step_depends_on
         private $name;
         private $param;
         private $log;
+        private $cb;
 
         function __construct($name){
             $this->name = $name;
@@ -188,6 +189,18 @@ CREATE TABLE public.job_step_depends_on
             return $this->submit($param, true);
         }
 
+        function setCallback($fn){
+            $this->setCb($fn);
+        }
+        function setCb($fn){
+            if(!is_callable($fn)){
+                throw new JobSubmitException("Passed param is not function");
+            }
+            $this->cb = $fn;
+        }
+        function getCb(){
+            return $this->cb;
+        }
         function submit($param, $isOnce=0){
             $this->log->debug(" <{$this->name}> Submit new steps; isOnce=$isOnce");
             if(is_callable($param)){
@@ -277,7 +290,7 @@ class JobExecutor extends sqlHelper{
             $this->log->debug(" $logPrefix <$jobName> row inserted with id=$jobId");
             $ids=[]; $prevIds=[];
             $pos=0;
-            print_r($job->getRunOnce());
+
             foreach($job->getSteps() as $s){
               if(is_callable($s)){
                   $this->log->trace(" $logPrefix <$jobName> Insert single step");
@@ -373,6 +386,22 @@ class JobExecutor extends sqlHelper{
           $decoded_param = json_decode($param,1);
           $decoded_val   = json_decode($val,1);
 
+          if($job->getCb()){
+              $this->log->trace("Run callback handler");
+              try{
+                $this->setSavepoint();
+                $cb = $job->getCb();
+                $cb($decoded_param, $decoded_val, $this);
+                $this->log->trace("Callback handler is done");
+                $this->releaseSavepoint();
+              }catch(Exception $e){
+                $this->log->trace("Callback handler has thrown exception:" . $e->getMessage());
+                $this->rollbackToSavepoint();
+                $this->exec_query("update {$tp}job_step set is_failed=true where id=?", $r['id']);
+                $this->exec_query("update {$tp}job set last_error=?, is_failed=true where id=?", $e->getMessage(), $r['job_id']);
+                continue;
+              }
+          }
           try{
              $this->log->trace("set savepoint");
              $this->setSavepoint();
