@@ -39,7 +39,7 @@ $job->submit(function($param, &$ctx){
                    $ctx['val']++;
             });
 $job->setCallback(function($p,&$ctx,$je){
-    if(isset($ctx['val1']))
+    if(0 && isset($ctx['val1']))
       throw new Exception("Broke job!");
 });
 $je->add($job);

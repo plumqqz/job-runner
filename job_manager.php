@@ -24,7 +24,8 @@ create table job_step(
    subpos int,
    is_failed boolean default false,
    run_once boolean default false,
-   run_after datetime
+   run_after datetime,
+   try_count int
 )
 
 create table job_step_depends_on(
@@ -294,7 +295,7 @@ class JobExecutor extends sqlHelper{
             foreach($job->getSteps() as $s){
               if(is_callable($s)){
                   $this->log->trace(" $logPrefix <$jobName> Insert single step");
-                  $this->exec_query("insert into {$tp}job_step(job_id, pos, subpos, run_after, run_once) values(?,?,null,'2001-01-01',?)", $jobId, $pos, $job->getRunOnce()[$pos]);
+                  $this->exec_query("insert into {$tp}job_step(job_id, pos, subpos, run_after, run_once, try_count) values(?,?,null,'2001-01-01',?,?)", $jobId, $pos, $job->getRunOnce()[$pos], $job->getRunOnce()[$pos]?:null);
                   $cid = $this->lastInsertId("{$tp}job_step_id_seq");
                   $this->log->trace(" $logPrefix <$jobName> Inserted single step id is $cid");
                   $ids = [ $cid ];
@@ -305,7 +306,7 @@ class JobExecutor extends sqlHelper{
               }elseif(is_array($s)){
                   $subpos=0;
                   foreach($s as $s1){
-                     $this->exec_query("insert into {$tp}job_step(job_id, pos, subpos, run_after, run_once) values(?,?,?,'2001-01-01',?)", $jobId, $pos, $subpos, $job->getRunOnce()[$pos]);
+                     $this->exec_query("insert into {$tp}job_step(job_id, pos, subpos, run_after, run_once, try_count) values(?,?,?,'2001-01-01',?,?)", $jobId, $pos, $subpos, $job->getRunOnce()[$pos], $job->getRunOnce()[$pos]?:null);
                      $cid = $this->getDbh()->lastInsertId("{$tp}job_step_id_seq");
                      $ids[] = $cid;
                      foreach($prevIds as $pid){
@@ -353,13 +354,27 @@ class JobExecutor extends sqlHelper{
           }
           $this->log->debug(" $logPrefix Got row to execute, trying to hold lock on it");
 
-          $this->setSavepoint();
           $lock=$this->getLock('job-manager-' . $r['id']);
           if(!$lock){
             $this->log->debug(" $logPrefix Record already locked by other process; will continue");
-            $this->releaseSavepoint();
             continue;
           }
+          $this->log->debug(" $logPrefix record locked");
+          if($r['try_count']>0){
+              $this->setSavepoint();
+              if(!$this->fetch_value("select try_count from {$tp}job_step js where js.id=? for update", $r['id'])){
+                  $this->releaseLock('job-manager-' . $r['id']);
+                  $this->releaseSavepoint();
+                  continue;
+              }
+              $this->exec_query("update {$tp}job_step set try_count=try_count-1 where id=?", $r['id']);
+              $this->releaseSavepoint();
+          }elseif($r['try_count']===0 && $r['run_once']){
+              $this->exec_query("update {$tp}job_step set is_failed=true and try_count>0 where id=?", $r['id']);
+              $this->releaseLock('job-manager-' . $r['id']);
+              continue;
+          }
+          $this->setSavepoint();
 
           $job = $this->jobs[$r['name']];
           if(!$this->fetch_value("select 1 from {$tp}job_step js where not js.is_failed and js.id=? for update", $r['id'])){
