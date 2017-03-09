@@ -361,8 +361,10 @@ class JobExecutor extends sqlHelper{
           }
           $this->log->debug(" $logPrefix record locked");
           if($r['try_count']>0){
+              $this->log->debug(" $logPrefix try_count > 0, will try to decrease");
               $this->setSavepoint();
               if(!$this->fetch_value("select try_count from {$tp}job_step js where js.id=? for update", $r['id'])){
+                  $this->log->debug(" $logPrefix try_count > 0 and another process have just updated this record, will release lock and continue");
                   $this->releaseLock('job-manager-' . $r['id']);
                   $this->releaseSavepoint();
                   continue;
@@ -370,6 +372,7 @@ class JobExecutor extends sqlHelper{
               $this->exec_query("update {$tp}job_step set try_count=try_count-1 where id=?", $r['id']);
               $this->releaseSavepoint();
           }elseif($r['try_count']===0 && $r['run_once']){
+              $this->log->debug(" $logPrefix try_count > 0 this job_step was set to runOnce and already has been run, set to failed, release locks and continue");
               $this->exec_query("update {$tp}job_step set is_failed=true and try_count>0 where id=?", $r['id']);
               $this->releaseLock('job-manager-' . $r['id']);
               continue;
