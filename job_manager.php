@@ -336,9 +336,9 @@ class JobExecutor extends sqlHelper{
     function resumeJob($jobId){
         $this->setSavepoint();
         $tp = $this->tp;
-        $this->exec_query("update {$tp}job_step set is_failed=false, try_count=case when try_count is null then null else 1 end where job_id=?", $jobId);
-        if($this->fetch_value('select row_count()'))
-            $this->exec_query("update {$tp}job set is_falied=f where id=?", $jobId);
+        $rc = $this->exec_query("update {$tp}job_step set is_failed=false, try_count=case when try_count is null then null else 1 end where job_id=?", $jobId);
+        if($rc)
+            $this->exec_query("update {$tp}job set is_failed=false where id=?", $jobId);
         $this->releaseSavepoint();
     }
     function run(){
