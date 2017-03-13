@@ -8,13 +8,15 @@ $je = new JobExecutor($dbh);
 $job = new Job("RUN#1");
 $job->submit(function($param, &$ctx){
                    $ctx['val']=1;
+                   $ctx['val1']=0;
+                   $ctx['valx']=0;
                    print "In #1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
              })
     ->submit([ function($param, &$ctx){
                    print "In #2.1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";        
                    if(!isset($ctx['val1']))
                      $ctx['val1']=0;
-                   $ctx['val1']++;
+                   $ctx['val1']=$ctx['val1']+1;
                    if($ctx['val1']<40)
                         return [ 'run_after' => 1 ];
                    return null;

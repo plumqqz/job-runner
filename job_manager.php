@@ -341,6 +341,7 @@ class JobExecutor extends sqlHelper{
             $this->exec_query("update {$tp}job set is_failed=false where id=?", $jobId);
         $this->releaseSavepoint();
     }
+
     function run(){
         $logPrefix = 'JobExecutor#run[pid=' . getmypid() . ']';
         $this->log->debug(" $logPrefix started");
@@ -375,8 +376,8 @@ class JobExecutor extends sqlHelper{
               $this->setSavepoint();
               if(!$this->fetch_value("select try_count from {$tp}job_step js where js.id=? for update", $r['id'])){
                   $this->log->debug(" $logPrefix try_count > 0 and another process have just updated this record, will release lock and continue");
-                  $this->releaseLock('job-manager-' . $r['id']);
                   $this->releaseSavepoint();
+                  $this->releaseLock('job-manager-' . $r['id']);
                   continue;
               }
               $this->exec_query("update {$tp}job_step set try_count=try_count-1 where id=?", $r['id']);
@@ -415,43 +416,33 @@ class JobExecutor extends sqlHelper{
           }
 
           list($param, $val) = $this->fetch_list("select parameters, val from {$tp}job j where j.id=?", $r['job_id']);
-          $decoded_param = json_decode($param,1);
-          $decoded_val   = json_decode($val,1);
-
-          if($job->getCb()){
-              $this->log->trace("Run callback handler");
-              try{
-                $this->setSavepoint();
-                $cb = $job->getCb();
-                $cb($decoded_param, $decoded_val, $this);
-                $this->log->trace("Callback handler is done");
-                $this->releaseSavepoint();
-              }catch(Exception $e){
-                $this->log->trace("Callback handler has thrown exception:" . $e->getMessage());
-                if($e instanceof \PDOException && preg_match('/^40/', $exc->errorInfo[0]) && $deadlockTryCount>5){
-                    $deadlockTryCount++;
-                    $this->log->info(" $logPrefix <{$job->getName()}> Callback processing - serialization failure: {$e->getMessage()}");
-                    $this->releaseSavepoint();
-                    $this->releaseLock('job-manager-' . $r['id']);
-                    continue;
-                }
-                $this->rollbackToSavepoint();
-                $this->exec_query("update {$tp}job_step set is_failed=true where id=?", $r['id']);
-                $this->exec_query("update {$tp}job set last_error=?, is_failed=true where id=?", $e->getMessage(), $r['job_id']);
-                continue;
-              }
-          }
           try{
+             $decoded_param = json_decode($param,1);
+             $decoded_val   = json_decode($val,1);
              $this->log->trace("set savepoint");
              $this->setSavepoint();
+             if($param && !is_array($decoded_param)){
+                 throw new \Exception("Passed param $param is not an array");
+             }
+             if($decoded_val && !is_array($decoded_val)){
+                 throw new \Exception("Context $val is not an array");
+             }
+
+             if($job->getCb()){
+                   $this->log->trace("Run callback handler");
+                   $this->setSavepoint();
+                   $cb = $job->getCb();
+                   $cb($decoded_param, $decoded_val, $this);
+                   $this->log->trace("Callback handler is done");
+                   $this->releaseSavepoint();
+             }
+
+
              $time = time();
              $rv = $fn($decoded_param, $decoded_val, $this);
              $deadlockTryCount = 0;
-             $encoded_val = json_encode($val);
-             $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned $encoded_val for parameters:{$param} context:{$val}");
-             $old_val = $this->fetch_value("select j.val from {$tp}job j where id=? for update", $r['job_id']);
-             $old_val = json_decode($old_val,1);
-             $val = json_encode($decoded_val+$old_val);
+             $val = json_encode($decoded_val);
+             $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned $val for parameters:{$param} context:{$val}");
              if($this->dbDriver == 'pgsql'){
                  $this->exec_query("update {$tp}job set val=?, first_step_started_at=to_timestamp(?), last_step_finished_at=to_timestamp(?) where id=?", $val, $time, time(), $r['job_id']);
              }else{
@@ -472,12 +463,12 @@ class JobExecutor extends sqlHelper{
              $this->log->trace("release savepoint");
              $this->releaseSavepoint();
              $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} processed");
-          }catch(Exception $e){
+          }catch(\Exception $e){
              if($e instanceof \PDOException && preg_match('/^40/', $exc->errorInfo[0]) && $deadlockTryCount>5){
                 $deadlockTryCount++;
                 $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} serialization failure: {$e->getMessage()}");
-                $this->releaseSavepoint();
-                $this->releaseSavepoint();
+                $this->rollbackToSavepoint();
+                $this->releaseSavepint();
                 $this->releaseLock('job-manager-' . $r['id']);
                 continue;
              }
