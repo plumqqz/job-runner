@@ -345,6 +345,7 @@ class JobExecutor extends sqlHelper{
         $logPrefix = 'JobExecutor#run[pid=' . getmypid() . ']';
         $this->log->debug(" $logPrefix started");
         $tp = $this->tp;
+        $deadlockTryCount = 0;
         while(1){
            $r = $this->fetch_row("
                         select j1.*, j.name
@@ -399,6 +400,8 @@ class JobExecutor extends sqlHelper{
           $fn = $job->getSteps()[$r['pos']];
           if(!$fn){
              $this->log->error(" $logPrefix <{$job->getName()}> Cannot find step {$r['pos']} ");
+             $this->releaseSavepoint();
+             $this->releaseLock('job-manager-' . $r['id']);
              throw new Exception("Cannot find step {$r['pos']} for job {$r['name']}");
           }
           if(is_array($fn)){
@@ -406,6 +409,8 @@ class JobExecutor extends sqlHelper{
           }
           if(!$fn){
              $this->log->error(" $logPrefix <{$job->getName()}> Cannot find step {$r['pos']} ");
+             $this->releaseSavepoint();
+             $this->releaseLock('job-manager-' . $r['id']);
              throw new Exception("Cannot find step {$r['pos']} for job {$r['name']}");
           }
 
@@ -423,6 +428,13 @@ class JobExecutor extends sqlHelper{
                 $this->releaseSavepoint();
               }catch(Exception $e){
                 $this->log->trace("Callback handler has thrown exception:" . $e->getMessage());
+                if($e instanceof \PDOException && preg_match('/^40/', $exc->errorInfo[0]) && $deadlockTryCount>5){
+                    $deadlockTryCount++;
+                    $this->log->info(" $logPrefix <{$job->getName()}> Callback processing - serialization failure: {$e->getMessage()}");
+                    $this->releaseSavepoint();
+                    $this->releaseLock('job-manager-' . $r['id']);
+                    continue;
+                }
                 $this->rollbackToSavepoint();
                 $this->exec_query("update {$tp}job_step set is_failed=true where id=?", $r['id']);
                 $this->exec_query("update {$tp}job set last_error=?, is_failed=true where id=?", $e->getMessage(), $r['job_id']);
@@ -434,6 +446,7 @@ class JobExecutor extends sqlHelper{
              $this->setSavepoint();
              $time = time();
              $rv = $fn($decoded_param, $decoded_val, $this);
+             $deadlockTryCount = 0;
              $encoded_val = json_encode($val);
              $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned $encoded_val for parameters:{$param} context:{$val}");
              $old_val = $this->fetch_value("select j.val from {$tp}job j where id=? for update", $r['job_id']);
@@ -460,6 +473,14 @@ class JobExecutor extends sqlHelper{
              $this->releaseSavepoint();
              $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} processed");
           }catch(Exception $e){
+             if($e instanceof \PDOException && preg_match('/^40/', $exc->errorInfo[0]) && $deadlockTryCount>5){
+                $deadlockTryCount++;
+                $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} serialization failure: {$e->getMessage()}");
+                $this->releaseSavepoint();
+                $this->releaseSavepoint();
+                $this->releaseLock('job-manager-' . $r['id']);
+                continue;
+             }
              $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} throws exception " . get_class($e) . ' with message ' . $e->getMessage());
              $this->log->trace("rollback to savepoint");
              $this->rollbackToSavepoint();
