@@ -18,7 +18,8 @@ $job->submit(function($param, &$ctx){
                      $ctx['val1']=0;
                    $ctx['val1']=$ctx['val1']+1;
                    if($ctx['val1']<40)
-                        return [ 'run_after' => 1 ];
+                        return 1;
+                        #return [ 'run_after' => 1 ];
                    return null;
                },
                function($param, &$ctx, $je){

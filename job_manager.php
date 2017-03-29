@@ -453,7 +453,8 @@ class JobExecutor extends sqlHelper{
                 $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
                 $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
                 $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
-             }elseif(is_array($rv)){
+             }elseif(is_array($rv) || is_numeric($rv)){
+                 $wait = is_array($rv) ? is_numeric($rv['run_after']) ? $rv['run_after'] : 1 : $rv;
                  if($this->dbDriver == 'pgsql'){
                     $this->exec_query("update {$tp}job_step js set run_after=coalesce(to_timestamp(?), now()) where js.id=?", time()+$rv['run_after'], $r['id']);
                  }else{
