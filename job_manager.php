@@ -80,6 +80,7 @@ CREATE TABLE public.job_step_depends_on
 */
     class JobSubmitException extends Exception{};
     class JobExecuteException extends Exception{};
+    class JobRunException extends Exception{};
     class JobLogger{
        const PANIC = 0;
        const ERROR = 1;
@@ -280,7 +281,7 @@ class JobExecutor extends sqlHelper{
 
       if(!$job){
          $this->log->error(" $logPrefix <$jobName> Cannot find job $jobName between before supplied jobs");
-         throw new Exception("Cannot find job $jobName");
+         throw new JobExecuteException("Cannot find job $jobName");
       }
 
       try{
@@ -318,7 +319,7 @@ class JobExecutor extends sqlHelper{
                   }
               }else{
                  $this->log->trace(" $logPrefix <$jobName> Unknown data found");
-                 throw new Exception("Unknown data in job $jobName");
+                 throw new JobExecuteException("Unknown data in job $jobName");
               }
               $prevIds = $ids;
               $ids = [];
@@ -374,6 +375,8 @@ class JobExecutor extends sqlHelper{
                           from {$tp}job_step j1, {$tp}job j
                          where not exists(select * from {$tp}job_step_depends_on jsd, {$tp}job_step j2 where jsd.job_step_id=j1.id and jsd.depends_on_step_id=j2.id)
                            and not j1.is_failed 
+                           and not j.is_done
+                           and not j.is_failed
                            and j1.run_after<now()
                            and j.id=j1.job_id
                            and (" . join(' or ', array_map( function($v){ return 'j.name like ?';}, $jobLike)) . ')
@@ -425,7 +428,7 @@ class JobExecutor extends sqlHelper{
              $this->log->error(" $logPrefix <{$job->getName()}> Cannot find step {$r['pos']} ");
              $this->releaseSavepoint();
              $this->releaseLock('job-manager-' . $r['id']);
-             throw new Exception("Cannot find step {$r['pos']} for job {$r['name']}");
+             throw new JobRunException("Cannot find step {$r['pos']} for job {$r['name']}");
           }
           if(is_array($fn)){
             $fn = $fn[$r['subpos']];
@@ -434,7 +437,7 @@ class JobExecutor extends sqlHelper{
              $this->log->error(" $logPrefix <{$job->getName()}> Cannot find step {$r['pos']} ");
              $this->releaseSavepoint();
              $this->releaseLock('job-manager-' . $r['id']);
-             throw new Exception("Cannot find step {$r['pos']} for job {$r['name']}");
+             throw new JobRunException("Cannot find step {$r['pos']} for job {$r['name']}");
           }
 
           list($param, $val) = $this->fetch_list("select parameters, val from {$tp}job j where j.id=?", $r['job_id']);
@@ -444,10 +447,10 @@ class JobExecutor extends sqlHelper{
              $this->log->trace("set savepoint");
              $this->setSavepoint();
              if($param && !is_array($decoded_param)){
-                 throw new \Exception("Passed param $param is not an array");
+                 throw new JobRunException("Passed param $param is not an array");
              }
              if($decoded_val && !is_array($decoded_val)){
-                 throw new \Exception("Context $val is not an array");
+                 throw new JobRunException("Context $val is not an array");
              }
 
              if($job->getCb()){
@@ -470,10 +473,14 @@ class JobExecutor extends sqlHelper{
              }else{
                  $this->exec_query("update {$tp}job set val=?, first_step_started_at=from_unixtime(?), last_step_finished_at=from_unixtime(?) where id=?", $val, $time, time(), $r['job_id']);
              }
-             if(!$rv){
+             if(!$rv || is_numeric($rv) && $rv<0){
                 $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
                 $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
                 $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
+                 if(is_numeric($rv) && $rv<0){
+                     print "<0!!!!!!!!!!\n";
+                    $this->exec_query("update {$tp}job set is_failed=true where id=?", $r['job_id']);
+                 }
                 if($r['last_step']){
                     $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
                 }
@@ -481,9 +488,9 @@ class JobExecutor extends sqlHelper{
              }elseif(is_array($rv) || is_numeric($rv)){
                  $wait = is_array($rv) ? is_numeric($rv['run_after']) ? $rv['run_after'] : 1 : $rv;
                  if($this->dbDriver == 'pgsql'){
-                    $this->exec_query("update {$tp}job_step js set run_after=coalesce(to_timestamp(?), now()) where js.id=?", time()+$rv['run_after'], $r['id']);
+                    $this->exec_query("update {$tp}job_step js set run_after=coalesce(to_timestamp(?), now()) where js.id=?", time()+$wait, $r['id']);
                  }else{
-                    $this->exec_query("update {$tp}job_step js set run_after=coalesce(from_unixtime(?), now()) where js.id=?", time()+$rv['run_after'], $r['id']);
+                    $this->exec_query("update {$tp}job_step js set run_after=coalesce(from_unixtime(?), now()) where js.id=?", time()+$wait, $r['id']);
                  }
              }
              $this->log->trace("release savepoint");

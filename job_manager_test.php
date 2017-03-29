@@ -18,7 +18,7 @@ $job->submit(function($param, &$ctx){
                      $ctx['val1']=0;
                    $ctx['val1']=$ctx['val1']+1;
                    if($ctx['val1']<40)
-                        return 1;
+                        return 5;
                         #return [ 'run_after' => 1 ];
                    return null;
                },
@@ -32,7 +32,7 @@ $job->submit(function($param, &$ctx){
                    }
                    $je->exec_query('insert into cnt(val) values(1)');
                    if($ctx['valx']<6){
-                      return "CONTINUE";
+                      return 0.3;
                    }
                }
              ]
@@ -65,6 +65,7 @@ $sendMailJob->submit( function($param, &$ctx){
             });
 
 $je->add($sendMailJob);
+$je->resumeJob(120378);
 
 if(!count($je->listNotEndedJobs('RUN#1'))){
     $je->execute("RUN#1", [ "path" => 1, "name"=>'Name'.time() . getmypid() ]);	
