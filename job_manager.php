@@ -349,12 +349,12 @@ class JobExecutor extends sqlHelper{
 
     function listEndedJobs($jobLike = '%'){
         $tp = $this->tp;
-        return $this->fetch_query("select * from {$tp}job j where j.name like ? and not exists(select * from {$tp}job_step js where j.id=js.job_id)", $jobLike);
+        return $this->fetch_query("select * from {$tp}job j where j.name like ? and j.is_done", $jobLike);
     }
 
     function listNotEndedJobs($jobLike = '%'){
         $tp = $this->tp;
-        return $this->fetch_query("select * from {$tp}job j where j.name like ? and exists(select * from {$tp}job_step js where j.id=js.job_id)", $jobLike);
+        return $this->fetch_query("select * from {$tp}job j where j.name like ? and not j.is_done", $jobLike);
     }
 
     function listFailedJobs($jobLike = '%'){
@@ -362,7 +362,7 @@ class JobExecutor extends sqlHelper{
         return $this->fetch_query("select * from {$tp}job j where j.name like ? and j.is_failed", $jobLike);
     }
 
-    function run($jobLike = '%'){
+    function run($jobLike = [ '%' ]){
         $logPrefix = 'JobExecutor#run[pid=' . getmypid() . ']';
         $this->log->debug(" $logPrefix started");
         $tp = $this->tp;
@@ -370,14 +370,14 @@ class JobExecutor extends sqlHelper{
         while(1){
            $r = $this->fetch_row("
                         select j1.*, j.name,
-                          case when exists(select * from {$tp}job_step_depends_on jsd where jsd.depends_on_step_id=j1.id) then 1 else 0 end as last_step
+                          case when exists(select * from {$tp}job_step_depends_on jsd where jsd.depends_on_step_id=j1.id) then 0 else 1 end as last_step
                           from {$tp}job_step j1, {$tp}job j
                          where not exists(select * from {$tp}job_step_depends_on jsd, {$tp}job_step j2 where jsd.job_step_id=j1.id and jsd.depends_on_step_id=j2.id)
                            and not j1.is_failed 
                            and j1.run_after<now()
                            and j.id=j1.job_id
-                           and j.name like ?
-                           limit 1", $jobLike
+                           and (" . join(' or ', array_map( function($v){ return 'j.name like ?';}, $jobLike)) . ')
+                           limit 1', ...$jobLike
                         );
           $this->log->debug(" $logPrefix database queried");
           if(!$r){

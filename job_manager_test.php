@@ -72,5 +72,5 @@ if(!count($je->listNotEndedJobs('RUN#1'))){
     $je->resumeJob($argv[1]);
 }
 $onceJob = new Job("once");
-#$je->run('RUN#1');
-$je->run();
+$je->run(['RUN#1', 'sendmail']);
+#$je->run();
