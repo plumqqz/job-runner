@@ -478,7 +478,6 @@ class JobExecutor extends sqlHelper{
                 $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
                 $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
                  if(is_numeric($rv) && $rv<0){
-                     print "<0!!!!!!!!!!\n";
                     $this->exec_query("update {$tp}job set is_failed=true where id=?", $r['job_id']);
                  }
                 if($r['last_step']){
