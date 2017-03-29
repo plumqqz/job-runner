@@ -237,8 +237,8 @@ class JobExecutor extends sqlHelper{
     private $log;
     private $callCount=0;
 
-    function __construct($dbh=null, $tp = ""){
-         $this->log = new JobLogger(getenv("JOB_MANAGER_LOGLVL") ?: JobLogger::TRACE);
+    function __construct($dbh=null, $tp = "", $logger=null){
+         $this->log = $logger ?: new JobLogger(getenv("JOB_MANAGER_LOGLVL") ?: JobLogger::TRACE);
          $this->tp = $tp;
          if($dbh)
             $this->setDbh($dbh);
