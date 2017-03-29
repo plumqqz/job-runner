@@ -245,7 +245,7 @@ class JobExecutor extends sqlHelper{
     }
 
     function add(Job $job){
-        $this->log->info("JobExecutor: add new job {$job->getName()}");
+        $this->log->debug("JobExecutor: add new job {$job->getName()}");
         $this->jobs[$job->getName()] = $job;
     }
 
@@ -273,7 +273,7 @@ class JobExecutor extends sqlHelper{
       $this->log->debug(" $logPrefix <$jobName> params hash is $hash");
 
       if($this->fetch_value("select 1 from {$tp}job j where j.name=? and j.hash=?", $jobName, $hash)){
-         $this->log->info(" $logPrefix <$jobName> Job $jobName with parameters hash equals to $hash already has been executed. Returning");
+         $this->log->debug(" $logPrefix <$jobName> Job $jobName with parameters hash equals to $hash already has been executed. Returning");
          return;
       }
       
@@ -467,7 +467,7 @@ class JobExecutor extends sqlHelper{
              $rv = $fn($decoded_param, $decoded_val, $this);
              $deadlockTryCount = 0;
              $val = json_encode($decoded_val);
-             $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned $val for parameters:{$param} context:{$val}");
+             $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned $val for parameters:{$param} context:{$val}");
              if($this->dbDriver == 'pgsql'){
                  $this->exec_query("update {$tp}job set val=?, first_step_started_at=to_timestamp(?), last_step_finished_at=to_timestamp(?) where id=?", $val, $time, time(), $r['job_id']);
              }else{
@@ -484,7 +484,7 @@ class JobExecutor extends sqlHelper{
                 if($r['last_step']){
                     $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
                 }
-                $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
+                $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
              }elseif(is_array($rv) || is_numeric($rv)){
                  $wait = is_array($rv) ? is_numeric($rv['run_after']) ? $rv['run_after'] : 1 : $rv;
                  if($this->dbDriver == 'pgsql'){
@@ -499,13 +499,13 @@ class JobExecutor extends sqlHelper{
           }catch(\Exception $e){
              if($e instanceof \PDOException && preg_match('/^40/', $exc->errorInfo[0]) && $deadlockTryCount>5){
                 $deadlockTryCount++;
-                $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} serialization failure: {$e->getMessage()}");
+                $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} serialization failure: {$e->getMessage()}");
                 $this->rollbackToSavepoint();
                 $this->releaseSavepint();
                 $this->releaseLock('job-manager-' . $r['id']);
                 continue;
              }
-             $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} throws exception " . get_class($e) . ' with message ' . $e->getMessage());
+             $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} throws exception " . get_class($e) . ' with message ' . $e->getMessage());
              $this->log->trace("rollback to savepoint");
              $this->rollbackToSavepoint();
              $this->exec_query("update {$tp}job_step set is_failed=true where id=?", $r['id']);
