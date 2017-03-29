@@ -342,6 +342,26 @@ class JobExecutor extends sqlHelper{
         $this->releaseSavepoint();
     }
 
+    function listJobs($jobLike = '%'){
+        $tp = $this->tp;
+        return $this->fetch_query("select * from {$tp}job where name like ?", $jobLike);
+    }
+
+    function listEndedJobs($jobLike = '%'){
+        $tp = $this->tp;
+        return $this->fetch_query("select * from {$tp}job j where j.name like ? and not exists(select * from {$tp}job_step js where j.id=js.job_id)", $jobLike);
+    }
+
+    function listNotEndedJobs($jobLike = '%'){
+        $tp = $this->tp;
+        return $this->fetch_query("select * from {$tp}job j where j.name like ? and exists(select * from {$tp}job_step js where j.id=js.job_id)", $jobLike);
+    }
+
+    function listFailedJobs($jobLike = '%'){
+        $tp = $this->tp;
+        return $this->fetch_query("select * from {$tp}job j where j.name like ? and j.is_failed", $jobLike);
+    }
+
     function run(){
         $logPrefix = 'JobExecutor#run[pid=' . getmypid() . ']';
         $this->log->debug(" $logPrefix started");
