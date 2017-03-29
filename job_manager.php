@@ -362,20 +362,22 @@ class JobExecutor extends sqlHelper{
         return $this->fetch_query("select * from {$tp}job j where j.name like ? and j.is_failed", $jobLike);
     }
 
-    function run(){
+    function run($jobLike = '%'){
         $logPrefix = 'JobExecutor#run[pid=' . getmypid() . ']';
         $this->log->debug(" $logPrefix started");
         $tp = $this->tp;
         $deadlockTryCount = 0;
         while(1){
            $r = $this->fetch_row("
-                        select j1.*, j.name
+                        select j1.*, j.name,
+                          case when exists(select * from {$tp}job_step_depends_on jsd where jsd.depends_on_step_id=j1.id) then 1 else 0 end as last_step
                           from {$tp}job_step j1, {$tp}job j
                          where not exists(select * from {$tp}job_step_depends_on jsd, {$tp}job_step j2 where jsd.job_step_id=j1.id and jsd.depends_on_step_id=j2.id)
                            and not j1.is_failed 
                            and j1.run_after<now()
                            and j.id=j1.job_id
-                           limit 1" 
+                           and j.name like ?
+                           limit 1", $jobLike
                         );
           $this->log->debug(" $logPrefix database queried");
           if(!$r){
@@ -498,6 +500,9 @@ class JobExecutor extends sqlHelper{
              $this->rollbackToSavepoint();
              $this->exec_query("update {$tp}job_step set is_failed=true where id=?", $r['id']);
              $this->exec_query("update {$tp}job set last_error=?, is_failed=true where id=?", $e->getMessage(), $r['job_id']);
+          }
+          if($r['last_step']){
+                $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
           }
           $this->releaseSavepoint();
           $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} completed");
