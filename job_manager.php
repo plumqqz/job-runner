@@ -474,6 +474,9 @@ class JobExecutor extends sqlHelper{
                 $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
                 $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
                 $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
+                if($r['last_step']){
+                    $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
+                }
                 $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
              }elseif(is_array($rv) || is_numeric($rv)){
                  $wait = is_array($rv) ? is_numeric($rv['run_after']) ? $rv['run_after'] : 1 : $rv;
@@ -500,9 +503,6 @@ class JobExecutor extends sqlHelper{
              $this->rollbackToSavepoint();
              $this->exec_query("update {$tp}job_step set is_failed=true where id=?", $r['id']);
              $this->exec_query("update {$tp}job set last_error=?, is_failed=true where id=?", $e->getMessage(), $r['job_id']);
-          }
-          if($r['last_step']){
-                $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
           }
           $this->releaseSavepoint();
           $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} completed");
