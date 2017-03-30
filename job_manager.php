@@ -249,9 +249,11 @@ class JobExecutor extends sqlHelper{
         $this->jobs[$job->getName()] = $job;
     }
 
-    function execute($jobName, $param, $ctx = null){
+    function execute($jobName, $param, $ctx = null, $delay = 0){
       $logPrefix = 'JobExecutor#execute[pid=' . getmypid() . ']';
-      $this->log->trace(" $logPrefix <$jobName> Submitted $jobName for execution");
+      $jobStepStartTs = date('Y-m-d H:i:s', time()+$delay);
+
+      $this->log->trace(" $logPrefix <$jobName> Submitted $jobName for execution at $jobStepStartTs");
 
       if(!is_string($jobName)){
          $this->log->error(" $logPrefix <$jobName> Passed jobName $jobName is not a string");
@@ -297,7 +299,7 @@ class JobExecutor extends sqlHelper{
             foreach($job->getSteps() as $s){
               if(is_callable($s)){
                   $this->log->trace(" $logPrefix <$jobName> Insert single step");
-                  $this->exec_query("insert into {$tp}job_step(job_id, pos, subpos, run_after, run_once, try_count) values(?,?,null,'2001-01-01',?,?)", $jobId, $pos, $job->getRunOnce()[$pos], $job->getRunOnce()[$pos]?:null);
+                  $this->exec_query("insert into {$tp}job_step(job_id, pos, subpos, run_after, run_once, try_count) values(?,?,null,?,?,?)", $jobId, $pos, $jobStepStartTs, $job->getRunOnce()[$pos], $job->getRunOnce()[$pos]?:null);
                   $cid = $this->lastInsertId("{$tp}job_step_id_seq");
                   $this->log->trace(" $logPrefix <$jobName> Inserted single step id is $cid");
                   $ids = [ $cid ];
@@ -308,7 +310,7 @@ class JobExecutor extends sqlHelper{
               }elseif(is_array($s)){
                   $subpos=0;
                   foreach($s as $s1){
-                     $this->exec_query("insert into {$tp}job_step(job_id, pos, subpos, run_after, run_once, try_count) values(?,?,?,'2001-01-01',?,?)", $jobId, $pos, $subpos, $job->getRunOnce()[$pos], $job->getRunOnce()[$pos]?:null);
+                     $this->exec_query("insert into {$tp}job_step(job_id, pos, subpos, run_after, run_once, try_count) values(?,?,?,?,?,?)", $jobId, $pos, $subpos, $jobStepStartTs, $job->getRunOnce()[$pos], $job->getRunOnce()[$pos]?:null);
                      $cid = $this->getDbh()->lastInsertId("{$tp}job_step_id_seq");
                      $ids[] = $cid;
                      foreach($prevIds as $pid){
@@ -381,7 +383,7 @@ class JobExecutor extends sqlHelper{
                            and not j1.is_failed 
                            and not j.is_done
                            and not j.is_failed
-                           and j1.run_after<now()
+                           and j1.run_after<=now()
                            and j.id=j1.job_id
                            and (" . join(' or ', array_map( function($v){ return 'j.name like ?';}, $jobLike)) . ')
                            limit 1', ...$jobLike

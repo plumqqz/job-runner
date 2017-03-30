@@ -18,7 +18,7 @@ $job->submit(function($param, &$ctx){
                      $ctx['val1']=0;
                    $ctx['val1']=$ctx['val1']+1;
                    if($ctx['val1']<40)
-                        return 5;
+                        return 1;
                         #return [ 'run_after' => 1 ];
                    return null;
                },
@@ -32,7 +32,7 @@ $job->submit(function($param, &$ctx){
                    }
                    $je->exec_query('insert into cnt(val) values(1)');
                    if($ctx['valx']<6){
-                      return 0.3;
+                      return 1;
                    }
                }
              ]
