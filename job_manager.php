@@ -329,6 +329,7 @@ class JobExecutor extends sqlHelper{
             }
           $this->releaseSavepoint();
           $this->log->debug(" $logPrefix <$jobName> Stored into repository");
+          return $jobId;
       }catch(Exception $e){
           $this->exec_query("rollback");
           $this->log->error(" $logPrefix <$jobName> Cannot store job into repository");
