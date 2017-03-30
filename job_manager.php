@@ -363,6 +363,10 @@ class JobExecutor extends sqlHelper{
         return $this->fetch_query("select * from {$tp}job j where j.name like ? and j.is_failed", $jobLike);
     }
 
+    function cleanUp(){
+        $this->exec_query('delete from jobs.job where not exists(select * from jobs.job_step js where job.id=js.job_id)');
+    }
+
     function run($jobLike = [ '%' ]){
         $logPrefix = 'JobExecutor#run[pid=' . getmypid() . ']';
         $this->log->debug(" $logPrefix started");
