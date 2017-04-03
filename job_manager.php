@@ -242,6 +242,16 @@ class JobExecutor extends sqlHelper{
          $this->tp = $tp;
          if($dbh)
             $this->setDbh($dbh);
+
+         $job = new Job('.execute');
+         $job->submit(function($param, &$ctx, $je){
+             try{
+                 $je->execute(@$param['name'], @$param['param'], @$param['ctx'], @$param['delay']);
+             }catch(Exception $e){
+                 $this->log->error("Internal executor: Cannot submit job {$param['name']} : {$e->getMessage()}");
+             }
+         });
+         $this->add($job);
     }
 
     function add(Job $job){

@@ -17,7 +17,7 @@ $job->submit(function($param, &$ctx){
                    if(!isset($ctx['val1']))
                      $ctx['val1']=0;
                    $ctx['val1']=$ctx['val1']+1;
-                   if($ctx['val1']<40)
+                   if($ctx['val1']<4)
                         return 1;
                         #return [ 'run_after' => 1 ];
                    return null;
@@ -28,7 +28,8 @@ $job->submit(function($param, &$ctx){
                      $ctx['valx']=0;
                    $ctx['valx']++;
                    if($ctx['valx']==4){
-                      $je->execute('sendmail', [ 'to' => 'lala@dodo.com', 'subject' => 'Just subject', 'body' => $param['name'] ]); 
+                      #$je->execute('sendmail', [ 'to' => 'lala@dodo.com', 'subject' => 'Just subject', 'body' => $param['name'] ]); 
+                      $je->execute('.execute', ['name' => 'sendmail', 'param' => [ 'to' => 'lala@dodo.com', 'subject' => 'Just subject', 'body' => $param['name'] ] ]); 
                    }
                    $je->exec_query('insert into cnt(val) values(1)');
                    if($ctx['valx']<6){
@@ -73,5 +74,5 @@ if(!count($je->listNotEndedJobs('RUN#1'))){
     $je->resumeJob($argv[1]);
 }
 $onceJob = new Job("once");
-$je->run(['RUN#1', 'sendmail']);
+$je->run(['RUN#1', 'sendmail', '.execute']);
 #$je->run();
