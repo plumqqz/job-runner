@@ -517,8 +517,9 @@ class JobExecutor extends sqlHelper{
                 $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
                 $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
                 $jobId = $this->execute($jobName, $param, $ctx, $delay);
-                $this->exec_query("insert into {$tp}job_step_depends_on(job_step_id, depends_on_step_id) select j1.id, j2.id from {$tp}job_step j1, {$tp}job_step j2 where j1.job_id=? and j2.job_id=?",
-                                   $r['job_id'], $jobId);
+                $this->exec_query("insert into {$tp}job_step_depends_on(job_step_id, depends_on_step_id)
+                                               select * from(select j1.id, (select max(j2.id) from {$tp}job_step j2 where j2.job_id=?) as did from {$tp}job_step j1 where j1.job_id=?) as t where t.did is not null",
+                                   $jobId, $r['job_id']);
              }
              $this->log->trace("release savepoint");
              $this->releaseSavepoint();

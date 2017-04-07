@@ -7,14 +7,15 @@ $je = new JobExecutor($dbh);
 
 $jobWaiter = new Job("Waiter");
 $jobWaiter->submit(function($param, &$ctx){
-                  print "--------------------------------->wait\n";
                   if(!@$ctx['wait']){
                       $ctx['wait']=1;
+                      print "--------------------------------->wait\n";
                       return 5;
                   }
                   return;
             })->submit(function($param, &$ctx){
                   print "=================================>waited!\n";
+                  $ctx['donedone']='lalaladododo';
             });
 
 $job = new Job("RUN#1");
@@ -23,16 +24,15 @@ $job->submit(function($param, &$ctx){
                    $ctx['val1']=0;
                    $ctx['valx']=0;
                    print "In #1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
-                   return [ 'Waiter', [],[],0];
+                   return [ 'Waiter', [],[],10];
              })
     ->submit([ function($param, &$ctx){
-                   print "In #2.1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";        
+                   print "In #2.1 {$ctx['donedone']} << param[name]={$param['name']} ctx[val]={$ctx['val']}\n";        
                    if(!isset($ctx['val1']))
                      $ctx['val1']=0;
                    $ctx['val1']=$ctx['val1']+1;
                    if($ctx['val1']<4)
                         return 1;
-                        #return [ 'run_after' => 1 ];
                    return null;
                },
                function($param, &$ctx, $je){
