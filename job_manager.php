@@ -501,13 +501,24 @@ class JobExecutor extends sqlHelper{
                     $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
                 }
                 $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
-             }elseif(is_array($rv) || is_numeric($rv)){
-                 $wait = is_array($rv) ? is_numeric($rv['run_after']) ? $rv['run_after'] : 1 : $rv;
+             }elseif(is_numeric($rv)){
+                 $wait = $rv;
                  if($this->dbDriver == 'pgsql'){
                     $this->exec_query("update {$tp}job_step js set run_after=coalesce(to_timestamp(?), now()) where js.id=?", time()+$wait, $r['id']);
                  }else{
                     $this->exec_query("update {$tp}job_step js set run_after=coalesce(from_unixtime(?), now()) where js.id=?", time()+$wait, $r['id']);
                  }
+             }elseif(is_array($rv)){
+                list($jobName, $param, $ctx, $delay) = $rv;
+                if(!(is_scalar($jobName) && is_array($param) && is_array($ctx) && is_numeric($delay))){
+                     throw new \Exception("Invalid parameters have been returned from job for new job execution");
+                }
+                $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
+                $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
+                $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
+                $jobId = $this->execute($jobName, $param, $ctx, $delay);
+                $this->exec_query("insert into {$tp}job_step_depends_on(job_step_id, depends_on_step_id) select j1.id, j2.id from {$tp}job_step j1, {$tp}job_step j2 where j1.job_id=? and j2.job_id=?",
+                                   $r['job_id'], $jobId);
              }
              $this->log->trace("release savepoint");
              $this->releaseSavepoint();

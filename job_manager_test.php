@@ -5,12 +5,25 @@ $dbh = new PDO('pgsql:host=localhost;port=5433;dbname=work', 'postgres','root');
 $je = new JobExecutor($dbh);
 #$je->setDbh($dbh);
 
+$jobWaiter = new Job("Waiter");
+$jobWaiter->submit(function($param, &$ctx){
+                  print "--------------------------------->wait\n";
+                  if(!@$ctx['wait']){
+                      $ctx['wait']=1;
+                      return 5;
+                  }
+                  return;
+            })->submit(function($param, &$ctx){
+                  print "=================================>waited!\n";
+            });
+
 $job = new Job("RUN#1");
 $job->submit(function($param, &$ctx){
                    $ctx['val']=1;
                    $ctx['val1']=0;
                    $ctx['valx']=0;
                    print "In #1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
+                   return [ 'Waiter', [],[],0];
              })
     ->submit([ function($param, &$ctx){
                    print "In #2.1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";        
@@ -53,6 +66,7 @@ $payoutJob->submit( function($param, &$ctx, $je){
                              print "Payout to user {$param['to']}\n";
                     });
 $je->add($payoutJob);
+$je->add($jobWaiter);
 
 $sendMailJob = new Job('sendmail');
 $sendMailJob->submit( function($param, &$ctx){
@@ -74,5 +88,5 @@ if(!count($je->listNotEndedJobs('RUN#1'))){
     $je->resumeJob($argv[1]);
 }
 $onceJob = new Job("once");
-$je->run(['RUN#1', 'sendmail', '.execute']);
-#$je->run();
+#$je->run(['RUN#1', 'sendmail', '.execute']);
+$je->run();
