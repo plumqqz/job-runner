@@ -259,7 +259,7 @@ class JobExecutor extends sqlHelper{
         $this->jobs[$job->getName()] = $job;
     }
 
-    function execute($jobName, $param, $ctx = null, $delay = 0){
+    function execute($jobName, $param, $ctx = null, $delay = 0, $depends_on = []){
       $logPrefix = 'JobExecutor#execute[pid=' . getmypid() . ']';
       $jobStepStartTs = date('Y-m-d H:i:s', time()+$delay);
 
@@ -303,7 +303,7 @@ class JobExecutor extends sqlHelper{
             $this->exec_query("insert into {$tp}job(parameters, val, name, hash ) values(?,?,?,?)", json_encode($param), $ctx ?: '{}', $jobName, $hash);
             $jobId = $this->lastInsertId("{$tp}job_id_seq");
             $this->log->debug(" $logPrefix <$jobName> row inserted with id=$jobId");
-            $ids=[]; $prevIds=[];
+            $ids=[]; $prevIds=$depends_on;
             $pos=0;
 
             foreach($job->getSteps() as $s){
@@ -374,6 +374,10 @@ class JobExecutor extends sqlHelper{
     function listFailedJobs($jobLike = '%'){
         $tp = $this->tp;
         return $this->fetch_query("select * from {$tp}job j where j.name like ? and j.is_failed", $jobLike);
+    }
+
+    function getJobLastStepId($jobId){
+        return $this->fetch_value("select js.id from {$tp}job_step js where js.job_id=? order by js.pos desc limit 1", $jobId);
     }
 
     function cleanUp(){
@@ -481,7 +485,7 @@ class JobExecutor extends sqlHelper{
 
 
              $time = time();
-             $rv = $fn($decoded_param, $decoded_val, $this);
+             $rv = $fn($decoded_param, $decoded_val, $this, $r);
              $deadlockTryCount = 0;
              $val = json_encode($decoded_val);
              $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned $val for parameters:{$param} context:{$val}");
