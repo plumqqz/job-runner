@@ -10,11 +10,12 @@ $jobWaiter->submit(function($param, &$ctx){
                   if(!@$ctx['wait']){
                       $ctx['wait']=1;
                       print "--------------------------------->wait\n";
-                      return 5;
+                      return 1;
                   }
                   return;
             })->submit(function($param, &$ctx){
                   print "=================================>waited!\n";
+                  $ctx['waiter_done']=1;
             });
 
 $job = new Job("RUN#1");
@@ -23,10 +24,11 @@ $job->submit(function($param, &$ctx){
                    $ctx['val1']=0;
                    $ctx['valx']=0;
                    print "In #1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
-                   return [ 'Waiter', [],[],10];
+                   return [ 'Waiter', [],[],1];
              })
     ->submit([ function($param, &$ctx){
                    print "In #2.1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";        
+                   print ">>>!!! {$ctx['waiter_done']} !!!<<<\n";
                    if(!isset($ctx['val1']))
                      $ctx['val1']=0;
                    $ctx['val1']=$ctx['val1']+1;

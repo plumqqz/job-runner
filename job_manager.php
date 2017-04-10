@@ -392,7 +392,7 @@ class JobExecutor extends sqlHelper{
         while(1){
            $r = $this->fetch_row("
                         select j1.*, j.name,
-                          case when exists(select * from {$tp}job_step_depends_on jsd where jsd.depends_on_step_id=j1.id) then 0 else 1 end as last_step
+                          case when exists(select * from {$tp}job_step_depends_on jsd, {$tp}job_step js1 where jsd.job_step_id=js1.id and js1.job_id=j.id and jsd.depends_on_step_id=j1.id) then 0 else 1 end as last_step
                           from {$tp}job_step j1, {$tp}job j
                          where not exists(select * from {$tp}job_step_depends_on jsd, {$tp}job_step j2 where jsd.job_step_id=j1.id and jsd.depends_on_step_id=j2.id)
                            and not j1.is_failed 
@@ -494,6 +494,21 @@ class JobExecutor extends sqlHelper{
              }else{
                  $this->exec_query("update {$tp}job set val=?, first_step_started_at=from_unixtime(?), last_step_finished_at=from_unixtime(?) where id=?", $val, $time, time(), $r['job_id']);
              }
+             if($r['last_step'] && !$rv){
+                    $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
+                    @list($djval, $jid) = $this->fetch_list("select j.val, j.id
+                                                      from {$tp}job j, {$tp}job_step js, {$tp}job_step_depends_on jsdo 
+                                                     where j.id=js.job_id and js.id=jsdo.job_step_id and jsdo.depends_on_step_id=?
+                                                     for update",
+                                       $r['id']);
+                    $this->log->debug("Try to update caller context: val = $val");
+                    if($djval){
+                        $djval = json_decode($djval,1);
+                        $djval = array_merge($djval, $decoded_val);
+                        $this->exec_query("update {$tp}job set val=? where id=?", json_encode($djval), $jid);
+                    }
+
+             }
              if(!$rv || is_numeric($rv) && $rv<0){
                 $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
                 $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
@@ -501,9 +516,6 @@ class JobExecutor extends sqlHelper{
                  if(is_numeric($rv) && $rv<0){
                     $this->exec_query("update {$tp}job set is_failed=true where id=?", $r['job_id']);
                  }
-                if($r['last_step']){
-                    $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
-                }
                 $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
              }elseif(is_numeric($rv)){
                  $wait = $rv;
