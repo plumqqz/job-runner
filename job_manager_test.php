@@ -24,7 +24,7 @@ $job->submit(function($param, &$ctx){
                    $ctx['val1']=0;
                    $ctx['valx']=0;
                    print "In #1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
-                   return [ 'Waiter', [],[],1];
+                   return [ 'Waiter', ['time' => time()],[],1];
              })
     ->submit([ function($param, &$ctx){
                    print "In #2.1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";        
@@ -33,7 +33,7 @@ $job->submit(function($param, &$ctx){
                      $ctx['val1']=0;
                    $ctx['val1']=$ctx['val1']+1;
                    if($ctx['val1']<4)
-                        return 1;
+                        return 0.1;
                    return null;
                },
                function($param, &$ctx, $je){
@@ -47,7 +47,7 @@ $job->submit(function($param, &$ctx){
                    }
                    $je->exec_query('insert into cnt(val) values(1)');
                    if($ctx['valx']<6){
-                      return 1;
+                      return 0.1;
                    }
                }
              ]

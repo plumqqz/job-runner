@@ -389,6 +389,7 @@ class JobExecutor extends sqlHelper{
         $this->log->debug(" $logPrefix started");
         $tp = $this->tp;
         $deadlockTryCount = 0;
+        $toSleep = 0;
         while(1){
            $r = $this->fetch_row("
                         select j1.*, j.name,
@@ -406,9 +407,11 @@ class JobExecutor extends sqlHelper{
           $this->log->debug(" $logPrefix database queried");
           if(!$r){
             $this->log->debug(" $logPrefix No data, going to sleep and continue");
-            sleep(3);
+            $toSleep = $toSleep > 5 ? 5 : $toSleep+0.2;
+            usleep($toSleep*1000000);
             continue;
           }
+          $toSleep = 0;
           $this->log->debug(" $logPrefix Got row to execute, trying to hold lock on it");
 
           $lock=$this->getLock('job-manager-' . $r['id']);
@@ -499,7 +502,8 @@ class JobExecutor extends sqlHelper{
                     @list($djval, $jid) = $this->fetch_list("select j.val, j.id
                                                       from {$tp}job j, {$tp}job_step js, {$tp}job_step_depends_on jsdo 
                                                      where j.id=js.job_id and js.id=jsdo.job_step_id and jsdo.depends_on_step_id=?
-                                                     for update",
+                                                     for update
+                                                     limit 1",
                                        $r['id']);
                     $this->log->debug("Try to update caller context: val = $val");
                     if($djval){
