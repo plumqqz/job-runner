@@ -15,6 +15,7 @@ $jobWaiter->submit(function($param, &$ctx){
                   return;
             })->submit(function($param, &$ctx){
                   print "=================================>waited!\n";
+                  $ctx=[];
                   $ctx['waiter_done']=1;
             });
 
