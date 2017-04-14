@@ -15,6 +15,7 @@ create table job(
    first_step_started_at datetime,
    try_count int default 0
 )
+create unique index job_name_hash on job(name,hash);
 
 
 create table job_step(
@@ -42,7 +43,7 @@ CREATE TABLE public.job
   parameters text,
   val text,
   name character varying(255),
-  hash character varying(255),
+  hash character varying(255) unique,
   is_done boolean DEFAULT false,
   is_failed boolean DEFAULT false,
   last_error text,
@@ -51,6 +52,7 @@ CREATE TABLE public.job
   try_count int default 0,
   CONSTRAINT job_pkey PRIMARY KEY (id)
 );
+create unique index job_name_hash on job(name,hash);
 CREATE TABLE public.job_step
 (
   id bigint NOT NULL DEFAULT nextval('job_step_id_seq'::regclass),
@@ -256,6 +258,9 @@ class JobExecutor extends sqlHelper{
 
     function add(Job $job){
         $this->log->debug("JobExecutor: add new job {$job->getName()}");
+        $arr = $job->getSteps();
+        if(is_array($arr[count($arr)-1]))
+            $job->submit(function(){});
         $this->jobs[$job->getName()] = $job;
     }
 
@@ -284,11 +289,6 @@ class JobExecutor extends sqlHelper{
       $hash = md5(serialize($param));
       $this->log->debug(" $logPrefix <$jobName> params hash is $hash");
 
-      if($this->fetch_value("select 1 from {$tp}job j where j.name=? and j.hash=?", $jobName, $hash)){
-         $this->log->debug(" $logPrefix <$jobName> Job $jobName with parameters hash equals to $hash already has been executed. Returning");
-         return;
-      }
-      
       $job = $this->jobs[$jobName];
 
       if(!$job){
@@ -300,7 +300,17 @@ class JobExecutor extends sqlHelper{
           $this->log->trace(" $logPrefix <$jobName> Going to insert steps for job");
           $this->setSavepoint();
             $this->log->trace(" $logPrefix <$jobName> Transaction started");
-            $this->exec_query("insert into {$tp}job(parameters, val, name, hash ) values(?,?,?,?)", json_encode($param), $ctx ?: '{}', $jobName, $hash);
+            $rc = 0;
+            if($this->dbDriver == 'pgsql'){
+                $rc = $this->exec_query("insert into {$tp}job(parameters, val, name, hash ) values(?,?,?,?) on conflict(name,hash) do nothing", json_encode($param), $ctx ?: '{}', $jobName, $hash);
+            }else{
+                $rc = $this->exec_query("insert into {$tp}job(parameters, val, name, hash ) values(?,?,?,?) on duplicate key update hash=hash", json_encode($param), $ctx ?: '{}', $jobName, $hash);
+            }
+            if(!$rc){
+                 $this->releaseSavepoint();
+                 $this->log->debug(" $logPrefix <$jobName> Job $jobName with parameters hash equals to $hash already has been executed. Returning");
+                 return;
+            }
             $jobId = $this->lastInsertId("{$tp}job_id_seq");
             $this->log->debug(" $logPrefix <$jobName> row inserted with id=$jobId");
             $ids=[]; $prevIds=$depends_on;
@@ -393,7 +403,9 @@ class JobExecutor extends sqlHelper{
         while(1){
            $r = $this->fetch_row("
                         select j1.*, j.name,
-                          case when exists(select * from {$tp}job_step_depends_on jsd, {$tp}job_step js1 where jsd.job_step_id=js1.id and js1.job_id=j.id and jsd.depends_on_step_id=j1.id) then 0 else 1 end as last_step
+                          case when exists(select * from {$tp}job_step_depends_on jsd, {$tp}job_step js1 where jsd.job_step_id=js1.id and js1.job_id=j.id and jsd.depends_on_step_id=j1.id)
+                                 or exists(select * from {$tp}job_step js where js.job_id=j.id and js.id<>j1.id)
+                                 then 0 else 1 end as last_step
                           from {$tp}job_step j1, {$tp}job j
                          where not exists(select * from {$tp}job_step_depends_on jsd, {$tp}job_step j2 where jsd.job_step_id=j1.id and jsd.depends_on_step_id=j2.id)
                            and not j1.is_failed 
@@ -490,8 +502,13 @@ class JobExecutor extends sqlHelper{
              $time = time();
              $rv = $fn($decoded_param, $decoded_val, $this, $r);
              $deadlockTryCount = 0;
-             $val = json_encode($decoded_val);
              $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned $val for parameters:{$param} context:{$val}");
+
+             $val2 = $this->fetch_value("select val from ${tp}job j where j.id=? for update", $r['job_id']);
+             $val2 = json_decode($val2,1);
+             $val = array_merge($val2,$decoded_val);
+             $val = json_encode($decoded_val);
+
              if($this->dbDriver == 'pgsql'){
                  $this->exec_query("update {$tp}job set val=?, first_step_started_at=to_timestamp(?), last_step_finished_at=to_timestamp(?) where id=?", $val, $time, time(), $r['job_id']);
              }else{
@@ -506,9 +523,9 @@ class JobExecutor extends sqlHelper{
                                                      limit 1",
                                        $r['id']);
                     $this->log->debug("Try to update caller context: val = $val");
-                    if($djval){
+                    if($jid){
                         $djval = json_decode($djval,1);
-                        $djval = array_merge($djval, $decoded_val);
+                        $djval = array_merge($decoded_val, $djval);
                         $this->exec_query("update {$tp}job set val=? where id=?", json_encode($djval), $jid);
                     }
 
