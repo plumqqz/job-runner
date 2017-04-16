@@ -391,7 +391,7 @@ class JobExecutor extends sqlHelper{
     }
 
     function cleanUp(){
-        $this->exec_query('delete from jobs.job where not exists(select * from jobs.job_step js where job.id=js.job_id)');
+        $this->exec_query("delete from {$tp}job where not exists(select * from ${tp}job_step js where job.id=js.job_id)");
     }
 
     function run($jobLike = [ '%' ]){
@@ -401,12 +401,13 @@ class JobExecutor extends sqlHelper{
         $deadlockTryCount = 0;
         $toSleep = 0;
         while(1){
-           $r = $this->fetch_row("
+           $rs = $this->fetch_query("
                         select j1.*, j.name,
                           case when exists(select * from {$tp}job_step_depends_on jsd, {$tp}job_step js1 where jsd.job_step_id=js1.id and js1.job_id=j.id and jsd.depends_on_step_id=j1.id)
                                  or exists(select * from {$tp}job_step js where js.job_id=j.id and js.id<>j1.id)
                                  then 0 else 1 end as last_step
-                          from {$tp}job_step j1, {$tp}job j
+                         from {$tp}job_step j1,
+                          {$tp}job j
                          where not exists(select * from {$tp}job_step_depends_on jsd, {$tp}job_step j2 where jsd.job_step_id=j1.id and jsd.depends_on_step_id=j2.id)
                            and not j1.is_failed 
                            and not j.is_done
@@ -414,171 +415,173 @@ class JobExecutor extends sqlHelper{
                            and j1.run_after<=now()
                            and j.id=j1.job_id
                            and (" . join(' or ', array_map( function($v){ return 'j.name like ?';}, $jobLike)) . ')
-                           limit 1', ...$jobLike
+                           limit 1000', ...$jobLike
                         );
-          $this->log->debug(" $logPrefix database queried");
-          if(!$r){
-            $this->log->debug(" $logPrefix No data, going to sleep and continue");
-            $toSleep = $toSleep > 5 ? 5 : $toSleep+0.2;
-            usleep($toSleep*1000000);
-            continue;
-          }
-          $toSleep = 0;
-          $this->log->debug(" $logPrefix Got row to execute, trying to hold lock on it");
+           foreach($rs as $r){
+              $this->log->debug(" $logPrefix database queried");
+              if(!$r){
+                $this->log->debug(" $logPrefix No data, going to sleep and continue");
+                $toSleep = $toSleep > 5 ? 5 : $toSleep+0.2;
+                usleep($toSleep*1000000);
+                continue;
+              }
+              $toSleep = 0;
+              $this->log->debug(" $logPrefix Got row to execute, trying to hold lock on it");
 
-          $lock=$this->getLock('job-manager-' . $r['id']);
-          if(!$lock){
-            $this->log->debug(" $logPrefix Record already locked by other process; will continue");
-            continue;
-          }
-          $this->log->debug(" $logPrefix record locked");
-          if($r['try_count']>0){
-              $this->log->debug(" $logPrefix try_count > 0, will try to decrease");
+              $lock=$this->getLock('job-manager-' . $r['id']);
+              if(!$lock){
+                $this->log->debug(" $logPrefix Record already locked by other process; will continue");
+                continue;
+              }
+              $this->log->debug(" $logPrefix record locked");
+              if($r['try_count']>0){
+                  $this->log->debug(" $logPrefix try_count > 0, will try to decrease");
+                  $this->setSavepoint();
+                  if(!$this->fetch_value("select try_count from {$tp}job_step js where js.id=? for update", $r['id'])){
+                      $this->log->debug(" $logPrefix try_count > 0 and another process have just updated this record, will release lock and continue");
+                      $this->releaseSavepoint();
+                      $this->releaseLock('job-manager-' . $r['id']);
+                      continue;
+                  }
+                  $this->exec_query("update {$tp}job_step set try_count=try_count-1 where id=?", $r['id']);
+                  $this->releaseSavepoint();
+              }elseif($r['try_count']===0 && $r['run_once']){
+                  $this->log->debug(" $logPrefix try_count > 0 this job_step was set to runOnce and already has been run, set to failed, release locks and continue");
+                  $this->exec_query("update {$tp}job_step set is_failed=true and try_count>0 where id=?", $r['id']);
+                  $this->releaseLock('job-manager-' . $r['id']);
+                  continue;
+              }
               $this->setSavepoint();
-              if(!$this->fetch_value("select try_count from {$tp}job_step js where js.id=? for update", $r['id'])){
-                  $this->log->debug(" $logPrefix try_count > 0 and another process have just updated this record, will release lock and continue");
+
+              $job = $this->jobs[$r['name']];
+              if(!$this->fetch_value("select 1 from {$tp}job_step js where not js.is_failed and js.id=? for update", $r['id'])){
+                  $this->log->debug(" $logPrefix Record was processed by another process; will continue");
                   $this->releaseSavepoint();
                   $this->releaseLock('job-manager-' . $r['id']);
                   continue;
               }
-              $this->exec_query("update {$tp}job_step set try_count=try_count-1 where id=?", $r['id']);
-              $this->releaseSavepoint();
-          }elseif($r['try_count']===0 && $r['run_once']){
-              $this->log->debug(" $logPrefix try_count > 0 this job_step was set to runOnce and already has been run, set to failed, release locks and continue");
-              $this->exec_query("update {$tp}job_step set is_failed=true and try_count>0 where id=?", $r['id']);
-              $this->releaseLock('job-manager-' . $r['id']);
-              continue;
-          }
-          $this->setSavepoint();
+              $this->log->debug(" $logPrefix Record locked; will do job {$job->getName()}");
+              $fn = $job->getSteps()[$r['pos']];
+              if(!$fn){
+                 $this->log->error(" $logPrefix <{$job->getName()}> Cannot find step {$r['pos']} ");
+                 $this->releaseSavepoint();
+                 $this->releaseLock('job-manager-' . $r['id']);
+                 throw new JobRunException("Cannot find step {$r['pos']} for job {$r['name']}");
+              }
+              if(is_array($fn)){
+                $fn = $fn[$r['subpos']];
+              }
+              if(!$fn){
+                 $this->log->error(" $logPrefix <{$job->getName()}> Cannot find step {$r['pos']} ");
+                 $this->releaseSavepoint();
+                 $this->releaseLock('job-manager-' . $r['id']);
+                 throw new JobRunException("Cannot find step {$r['pos']} for job {$r['name']}");
+              }
 
-          $job = $this->jobs[$r['name']];
-          if(!$this->fetch_value("select 1 from {$tp}job_step js where not js.is_failed and js.id=? for update", $r['id'])){
-              $this->log->debug(" $logPrefix Record was processed by another process; will continue");
-              $this->releaseSavepoint();
-              $this->releaseLock('job-manager-' . $r['id']);
-              continue;
-          }
-          $this->log->debug(" $logPrefix Record locked; will do job {$job->getName()}");
-          $fn = $job->getSteps()[$r['pos']];
-          if(!$fn){
-             $this->log->error(" $logPrefix <{$job->getName()}> Cannot find step {$r['pos']} ");
-             $this->releaseSavepoint();
-             $this->releaseLock('job-manager-' . $r['id']);
-             throw new JobRunException("Cannot find step {$r['pos']} for job {$r['name']}");
-          }
-          if(is_array($fn)){
-            $fn = $fn[$r['subpos']];
-          }
-          if(!$fn){
-             $this->log->error(" $logPrefix <{$job->getName()}> Cannot find step {$r['pos']} ");
-             $this->releaseSavepoint();
-             $this->releaseLock('job-manager-' . $r['id']);
-             throw new JobRunException("Cannot find step {$r['pos']} for job {$r['name']}");
-          }
-
-          list($param, $val) = $this->fetch_list("select parameters, val from {$tp}job j where j.id=?", $r['job_id']);
-          try{
-             $decoded_param = json_decode($param,1);
-             $decoded_val   = json_decode($val,1);
-             $this->log->trace("set savepoint");
-             $this->setSavepoint();
-             if($param && !is_array($decoded_param)){
-                 throw new JobRunException("Passed param $param is not an array");
-             }
-             if($decoded_val && !is_array($decoded_val)){
-                 throw new JobRunException("Context $val is not an array");
-             }
-
-             if($job->getCb()){
-                   $this->log->trace("Run callback handler");
-                   $this->setSavepoint();
-                   $cb = $job->getCb();
-                   $cb($decoded_param, $decoded_val, $this);
-                   $this->log->trace("Callback handler is done");
-                   $this->releaseSavepoint();
-             }
-
-
-             $time = time();
-             $rv = $fn($decoded_param, $decoded_val, $this, $r);
-             $deadlockTryCount = 0;
-             $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned $val for parameters:{$param} context:{$val}");
-
-             $val2 = $this->fetch_value("select val from ${tp}job j where j.id=? for update", $r['job_id']);
-             $val2 = json_decode($val2,1);
-             $val = array_merge($val2,$decoded_val);
-             $val = json_encode($decoded_val);
-
-             if($this->dbDriver == 'pgsql'){
-                 $this->exec_query("update {$tp}job set val=?, first_step_started_at=to_timestamp(?), last_step_finished_at=to_timestamp(?) where id=?", $val, $time, time(), $r['job_id']);
-             }else{
-                 $this->exec_query("update {$tp}job set val=?, first_step_started_at=from_unixtime(?), last_step_finished_at=from_unixtime(?) where id=?", $val, $time, time(), $r['job_id']);
-             }
-             if($r['last_step'] && !$rv){
-                    $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
-                    @list($djval, $jid) = $this->fetch_list("select j.val, j.id
-                                                      from {$tp}job j, {$tp}job_step js, {$tp}job_step_depends_on jsdo 
-                                                     where j.id=js.job_id and js.id=jsdo.job_step_id and jsdo.depends_on_step_id=?
-                                                     for update
-                                                     limit 1",
-                                       $r['id']);
-                    $this->log->debug("Try to update caller context: val = $val");
-                    if($jid){
-                        $djval = json_decode($djval,1);
-                        $djval = array_merge($decoded_val, $djval);
-                        $this->exec_query("update {$tp}job set val=? where id=?", json_encode($djval), $jid);
-                    }
-
-             }
-             if(!$rv || is_numeric($rv) && $rv<0){
-                $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
-                $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
-                $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
-                 if(is_numeric($rv) && $rv<0){
-                    $this->exec_query("update {$tp}job set is_failed=true where id=?", $r['job_id']);
+              list($param, $val) = $this->fetch_list("select parameters, val from {$tp}job j where j.id=?", $r['job_id']);
+              try{
+                 $decoded_param = json_decode($param,1);
+                 $decoded_val   = json_decode($val,1);
+                 $this->log->trace("set savepoint");
+                 $this->setSavepoint();
+                 if($param && !is_array($decoded_param)){
+                     throw new JobRunException("Passed param $param is not an array");
                  }
-                $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
-             }elseif(is_numeric($rv)){
-                 $wait = $rv;
+                 if($decoded_val && !is_array($decoded_val)){
+                     throw new JobRunException("Context $val is not an array");
+                 }
+
+                 if($job->getCb()){
+                       $this->log->trace("Run callback handler");
+                       $this->setSavepoint();
+                       $cb = $job->getCb();
+                       $cb($decoded_param, $decoded_val, $this);
+                       $this->log->trace("Callback handler is done");
+                       $this->releaseSavepoint();
+                 }
+
+
+                 $time = time();
+                 $rv = $fn($decoded_param, $decoded_val, $this, $r);
+                 $deadlockTryCount = 0;
+                 $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned $val for parameters:{$param} context:{$val}");
+
+                 $val2 = $this->fetch_value("select val from ${tp}job j where j.id=? for update", $r['job_id']);
+                 $val2 = json_decode($val2,1);
+                 $val = array_merge($val2,$decoded_val);
+                 $val = json_encode($decoded_val);
+
                  if($this->dbDriver == 'pgsql'){
-                    $this->exec_query("update {$tp}job_step js set run_after=coalesce(to_timestamp(?), now()) where js.id=?", time()+$wait, $r['id']);
+                     $this->exec_query("update {$tp}job set val=?, first_step_started_at=to_timestamp(?), last_step_finished_at=to_timestamp(?) where id=?", $val, $time, time(), $r['job_id']);
                  }else{
-                    $this->exec_query("update {$tp}job_step js set run_after=coalesce(from_unixtime(?), now()) where js.id=?", time()+$wait, $r['id']);
+                     $this->exec_query("update {$tp}job set val=?, first_step_started_at=from_unixtime(?), last_step_finished_at=from_unixtime(?) where id=?", $val, $time, time(), $r['job_id']);
                  }
-             }elseif(is_array($rv)){
-                list($jobName, $param, $ctx, $delay) = $rv;
-                if(!(is_scalar($jobName) && is_array($param) && is_array($ctx) && is_numeric($delay))){
-                     throw new \Exception("Invalid parameters have been returned from job for new job execution");
-                }
-                $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
-                $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
-                $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
-                $jobId = $this->execute($jobName, $param, $ctx, $delay);
-                $this->exec_query("insert into {$tp}job_step_depends_on(job_step_id, depends_on_step_id)
-                                               select * from(select j1.id, (select max(j2.id) from {$tp}job_step j2 where j2.job_id=?) as did from {$tp}job_step j1 where j1.job_id=? and j1.pos=?) as t where t.did is not null",
-                                   $jobId, $r['job_id'], $r['pos']+1);
-             }
-             $this->log->trace("release savepoint");
-             $this->releaseSavepoint();
-             $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} processed");
-          }catch(\Exception $e){
-             if($e instanceof \PDOException && preg_match('/^40/', $exc->errorInfo[0]) && $deadlockTryCount>5){
-                $deadlockTryCount++;
-                $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} serialization failure: {$e->getMessage()}");
-                $this->rollbackToSavepoint();
-                $this->releaseSavepint();
-                $this->releaseLock('job-manager-' . $r['id']);
-                continue;
-             }
-             $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} throws exception " . get_class($e) . ' with message ' . $e->getMessage());
-             $this->log->trace("rollback to savepoint");
-             $this->rollbackToSavepoint();
-             $this->exec_query("update {$tp}job_step set is_failed=true where id=?", $r['id']);
-             $this->exec_query("update {$tp}job set last_error=?, is_failed=true where id=?", $e->getMessage(), $r['job_id']);
-          }
-          $this->releaseSavepoint();
-          $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} completed");
-          $this->releaseLock('job-manager-' . $r['id']);
+                 if($r['last_step'] && !$rv){
+                        $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
+                        @list($djval, $jid) = $this->fetch_list("select j.val, j.id
+                                                          from {$tp}job j, {$tp}job_step js, {$tp}job_step_depends_on jsdo 
+                                                         where j.id=js.job_id and js.id=jsdo.job_step_id and jsdo.depends_on_step_id=?
+                                                         for update
+                                                         limit 1",
+                                           $r['id']);
+                        $this->log->debug("Try to update caller context: val = $val");
+                        if($jid){
+                            $djval = json_decode($djval,1);
+                            $djval = array_merge($decoded_val, $djval);
+                            $this->exec_query("update {$tp}job set val=? where id=?", json_encode($djval), $jid);
+                        }
+
+                 }
+                 if(!$rv || is_numeric($rv) && $rv<0){
+                    $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
+                    $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
+                    $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
+                    if(is_numeric($rv) && $rv<0){
+                        $this->exec_query("update {$tp}job set is_failed=true where id=?", $r['job_id']);
+                    }
+                    $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
+                 }elseif(is_numeric($rv)){
+                     $wait = $rv;
+                     if($this->dbDriver == 'pgsql'){
+                        $this->exec_query("update {$tp}job_step js set run_after=coalesce(to_timestamp(?), now()) where js.id=?", time()+$wait, $r['id']);
+                     }else{
+                        $this->exec_query("update {$tp}job_step js set run_after=coalesce(from_unixtime(?), now()) where js.id=?", time()+$wait, $r['id']);
+                     }
+                 }elseif(is_array($rv)){
+                    list($jobName, $param, $ctx, $delay) = $rv;
+                    if(!(is_scalar($jobName) && is_array($param) && is_array($ctx) && is_numeric($delay))){
+                         throw new \Exception("Invalid parameters have been returned from job for new job execution");
+                    }
+                    $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
+                    $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
+                    $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
+                    $jobId = $this->execute($jobName, $param, $ctx, $delay);
+                    $this->exec_query("insert into {$tp}job_step_depends_on(job_step_id, depends_on_step_id)
+                                                   select * from(select j1.id, (select max(j2.id) from {$tp}job_step j2 where j2.job_id=?) as did from {$tp}job_step j1 where j1.job_id=? and j1.pos=?) as t where t.did is not null",
+                                       $jobId, $r['job_id'], $r['pos']+1);
+                 }
+                 $this->log->trace("release savepoint");
+                 $this->releaseSavepoint();
+                 $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} processed");
+              }catch(\Exception $e){
+                 if($e instanceof \PDOException && preg_match('/^40/', $exc->errorInfo[0]) && $deadlockTryCount>5){
+                    $deadlockTryCount++;
+                    $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} serialization failure: {$e->getMessage()}");
+                    $this->rollbackToSavepoint();
+                    $this->releaseSavepint();
+                    $this->releaseLock('job-manager-' . $r['id']);
+                    continue;
+                 }
+                 $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} throws exception " . get_class($e) . ' with message ' . $e->getMessage());
+                 $this->log->trace("rollback to savepoint");
+                 $this->rollbackToSavepoint();
+                 $this->exec_query("update {$tp}job_step set is_failed=true where id=?", $r['id']);
+                 $this->exec_query("update {$tp}job set last_error=?, is_failed=true where id=?", $e->getMessage(), $r['job_id']);
+              }
+              $this->releaseSavepoint();
+              $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} completed");
+              $this->releaseLock('job-manager-' . $r['id']);
+            }
         }
     }
  }
