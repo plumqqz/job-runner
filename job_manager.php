@@ -417,15 +417,15 @@ class JobExecutor extends sqlHelper{
                            and (" . join(' or ', array_map( function($v){ return 'j.name like ?';}, $jobLike)) . ')
                            limit 100', ...$jobLike
                         );
+           if(!$rs){
+            $this->log->debug(" $logPrefix No data, going to sleep and continue");
+            $toSleep = $toSleep > 5 ? 5 : $toSleep+0.2;
+            usleep($toSleep*1000000);
+            continue;
+           }
+           $toSleep = 0;
            foreach($rs as $r){
               $this->log->debug(" $logPrefix database queried");
-              if(!$r){
-                $this->log->debug(" $logPrefix No data, going to sleep and continue");
-                $toSleep = $toSleep > 5 ? 5 : $toSleep+0.2;
-                usleep($toSleep*1000000);
-                continue;
-              }
-              $toSleep = 0;
               $this->log->debug(" $logPrefix Got row to execute, trying to hold lock on it");
 
               $lock=$this->getLock('job-manager-' . $r['id']);
