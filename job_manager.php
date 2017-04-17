@@ -415,7 +415,7 @@ class JobExecutor extends sqlHelper{
                            and j1.run_after<=now()
                            and j.id=j1.job_id
                            and (" . join(' or ', array_map( function($v){ return 'j.name like ?';}, $jobLike)) . ')
-                           limit 1000', ...$jobLike
+                           limit 100', ...$jobLike
                         );
            foreach($rs as $r){
               $this->log->debug(" $logPrefix database queried");
@@ -522,7 +522,8 @@ class JobExecutor extends sqlHelper{
                                                           from {$tp}job j, {$tp}job_step js, {$tp}job_step_depends_on jsdo 
                                                          where j.id=js.job_id and js.id=jsdo.job_step_id and jsdo.depends_on_step_id=?
                                                          for update
-                                                         limit 1",
+                                                         limit 1
+                                                         ",
                                            $r['id']);
                         $this->log->debug("Try to update caller context: val = $val");
                         if($jid){
