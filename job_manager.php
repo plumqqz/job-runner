@@ -387,11 +387,12 @@ class JobExecutor extends sqlHelper{
     }
 
     function getJobLastStepId($jobId){
+        $tp = $this->tp;
         return $this->fetch_value("select js.id from {$tp}job_step js where js.job_id=? order by js.pos desc limit 1", $jobId);
     }
 
     function cleanUp(){
-        $this->exec_query("delete from {$tp}job where not exists(select * from ${tp}job_step js where job.id=js.job_id)");
+        $this->exec_query("delete from {$tp}job where not exists(select * from {$tp}job_step js where job.id=js.job_id)");
     }
 
     function run($jobLike = [ '%' ]){
@@ -415,7 +416,7 @@ class JobExecutor extends sqlHelper{
                            and j1.run_after<=now()
                            and j.id=j1.job_id
                            and (" . join(' or ', array_map( function($v){ return 'j.name like ?';}, $jobLike)) . ')
-                           limit 100', ...$jobLike
+                           limit 1000', ...$jobLike
                         );
            if(!$rs){
             $this->log->debug(" $logPrefix No data, going to sleep and continue");
