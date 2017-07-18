@@ -30,8 +30,8 @@ create table job_step(
 )
 
 create table job_step_depends_on(
-  job_step_id bigint not null references job_step(id),
-  depends_on_step_id bigint not null references job_step(id),
+  job_step_id bigint not null, -- references job_step(id),
+  depends_on_step_id bigint not null, -- references job_step(id),
   primary key(job_step_id, depends_on_step_id)
 )
 
@@ -71,13 +71,13 @@ CREATE TABLE public.job_step_depends_on
 (
   job_step_id bigint NOT NULL,
   depends_on_step_id bigint NOT NULL,
-  CONSTRAINT job_step_depends_on_pkey PRIMARY KEY (job_step_id, depends_on_step_id),
-  CONSTRAINT job_step_depends_on_depends_on_step_id_fkey FOREIGN KEY (depends_on_step_id)
-      REFERENCES public.job_step (id) MATCH SIMPLE
-      ON UPDATE NO ACTION ON DELETE NO ACTION,
-  CONSTRAINT job_step_depends_on_job_step_id_fkey FOREIGN KEY (job_step_id)
-      REFERENCES public.job_step (id) MATCH SIMPLE
-      ON UPDATE NO ACTION ON DELETE NO ACTION
+  CONSTRAINT job_step_depends_on_pkey PRIMARY KEY (job_step_id, depends_on_step_id)
+ --   CONSTRAINT job_step_depends_on_depends_on_step_id_fkey FOREIGN KEY (depends_on_step_id)
+ --      REFERENCES public.job_step (id) MATCH SIMPLE
+ --      ON UPDATE NO ACTION ON DELETE NO ACTION,
+ --  CONSTRAINT job_step_depends_on_job_step_id_fkey FOREIGN KEY (job_step_id)
+ --      REFERENCES public.job_step (id) MATCH SIMPLE
+ --      ON UPDATE NO ACTION ON DELETE NO ACTION 
 );
 */
     class JobSubmitException extends Exception{};
@@ -392,7 +392,10 @@ class JobExecutor extends sqlHelper{
     }
 
     function cleanUp(){
-        $this->exec_query("delete from {$tp}job where not exists(select * from {$tp}job_step js where job.id=js.job_id)");
+        $tp = $this->tp;
+        $this->exec_query("delete from {$tp}job where not exists(select * from {$tp}job_step js where job.id=js.job_id) and job.is_done");
+        $this->exec_query("delete from {$tp}job_step_depends_on where not exists(select * from {$tp}job_step js where js.id=job_step_depends_on.job_step_id)");
+        $this->exec_query("delete from {$tp}job_step_depends_on where not exists(select * from {$tp}job_step js where js.id=job_step_depends_on.depends_on_step_id)");
     }
 
     function run($jobLike = [ '%' ]){
@@ -419,17 +422,18 @@ class JobExecutor extends sqlHelper{
                            limit 1000', ...$jobLike
                         );
            if(!$rs){
-            $this->log->debug(" $logPrefix No data, going to sleep and continue");
-            $toSleep = $toSleep > 5 ? 5 : $toSleep+0.2;
-            usleep($toSleep*1000000);
-            continue;
+                $this->log->debug(" $logPrefix No data, going to sleep and continue");
+                $toSleep = $toSleep > 5 ? 5 : $toSleep+0.2;
+                usleep($toSleep*1000000);
+                continue;
            }
            $toSleep = 0;
            foreach($rs as $r){
               $this->log->debug(" $logPrefix database queried");
               $this->log->debug(" $logPrefix Got row to execute, trying to hold lock on it");
+              $lockName = 'job-manager-' . $r['id'];
 
-              $lock=$this->getLock('job-manager-' . $r['id']);
+              $lock=$this->getLock($lockName);
               if(!$lock){
                 $this->log->debug(" $logPrefix Record already locked by other process; will continue");
                 continue;
@@ -441,7 +445,7 @@ class JobExecutor extends sqlHelper{
                   if(!$this->fetch_value("select try_count from {$tp}job_step js where js.id=? for update", $r['id'])){
                       $this->log->debug(" $logPrefix try_count > 0 and another process have just updated this record, will release lock and continue");
                       $this->releaseSavepoint();
-                      $this->releaseLock('job-manager-' . $r['id']);
+                      $this->releaseLock($lockName);
                       continue;
                   }
                   $this->exec_query("update {$tp}job_step set try_count=try_count-1 where id=?", $r['id']);
@@ -449,7 +453,7 @@ class JobExecutor extends sqlHelper{
               }elseif($r['try_count']===0 && $r['run_once']){
                   $this->log->debug(" $logPrefix try_count > 0 this job_step was set to runOnce and already has been run, set to failed, release locks and continue");
                   $this->exec_query("update {$tp}job_step set is_failed=true and try_count>0 where id=?", $r['id']);
-                  $this->releaseLock('job-manager-' . $r['id']);
+                  $this->releaseLock($lockName);
                   continue;
               }
               $this->setSavepoint();
@@ -458,7 +462,7 @@ class JobExecutor extends sqlHelper{
               if(!$this->fetch_value("select 1 from {$tp}job_step js where not js.is_failed and js.id=? for update", $r['id'])){
                   $this->log->debug(" $logPrefix Record was processed by another process; will continue");
                   $this->releaseSavepoint();
-                  $this->releaseLock('job-manager-' . $r['id']);
+                  $this->releaseLock($lockName);
                   continue;
               }
               $this->log->debug(" $logPrefix Record locked; will do job {$job->getName()}");
@@ -466,7 +470,7 @@ class JobExecutor extends sqlHelper{
               if(!$fn){
                  $this->log->error(" $logPrefix <{$job->getName()}> Cannot find step {$r['pos']} ");
                  $this->releaseSavepoint();
-                 $this->releaseLock('job-manager-' . $r['id']);
+                 $this->releaseLock($lockName);
                  throw new JobRunException("Cannot find step {$r['pos']} for job {$r['name']}");
               }
               if(is_array($fn)){
@@ -475,7 +479,7 @@ class JobExecutor extends sqlHelper{
               if(!$fn){
                  $this->log->error(" $logPrefix <{$job->getName()}> Cannot find step {$r['pos']} ");
                  $this->releaseSavepoint();
-                 $this->releaseLock('job-manager-' . $r['id']);
+                 $this->releaseLock($lockName);
                  throw new JobRunException("Cannot find step {$r['pos']} for job {$r['name']}");
               }
 
@@ -486,9 +490,11 @@ class JobExecutor extends sqlHelper{
                  $this->log->trace("set savepoint");
                  $this->setSavepoint();
                  if($param && !is_array($decoded_param)){
+                     $this->releaseSavepoint();
                      throw new JobRunException("Passed param $param is not an array");
                  }
                  if($decoded_val && !is_array($decoded_val)){
+                     $this->releaseSavepoint();
                      throw new JobRunException("Context $val is not an array");
                  }
 
@@ -513,16 +519,23 @@ class JobExecutor extends sqlHelper{
                  $val = json_encode($decoded_val);
 
                  if($this->dbDriver == 'pgsql'){
-                     $this->exec_query("update {$tp}job set val=?, first_step_started_at=to_timestamp(?), last_step_finished_at=to_timestamp(?) where id=?", $val, $time, time(), $r['job_id']);
+                     $cnt = $this->exec_query("update {$tp}job set val=?, first_step_started_at=to_timestamp(?), last_step_finished_at=to_timestamp(?) where id=?", $val, $time, time(), $r['job_id']);
+                     if($cnt<>1){
+                        $this->log->error("Update query returns 0 rows");
+                        #throw new JobRunException("Update query returns 0 rows");
+                     }
                  }else{
-                     $this->exec_query("update {$tp}job set val=?, first_step_started_at=from_unixtime(?), last_step_finished_at=from_unixtime(?) where id=?", $val, $time, time(), $r['job_id']);
+                     $cnt = $this->exec_query("update {$tp}job set val=?, first_step_started_at=from_unixtime(?), last_step_finished_at=from_unixtime(?) where id=?", $val, $time, time(), $r['job_id']);
+                     if($cnt<>1){
+                        $this->log->info("Update query returns $cnt rows");
+                        #throw new JobRunException("Update query returns 0 rows");
+                     }
                  }
                  if($r['last_step'] && !$rv){
                         $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
                         @list($djval, $jid) = $this->fetch_list("select j.val, j.id
                                                           from {$tp}job j, {$tp}job_step js, {$tp}job_step_depends_on jsdo 
                                                          where j.id=js.job_id and js.id=jsdo.job_step_id and jsdo.depends_on_step_id=?
-                                                         for update
                                                          limit 1
                                                          ",
                                            $r['id']);
@@ -535,8 +548,8 @@ class JobExecutor extends sqlHelper{
 
                  }
                  if(!$rv || is_numeric($rv) && $rv<0){
-                    $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
-                    $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
+                    #$this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
+                    #$this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
                     $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
                     if(is_numeric($rv) && $rv<0){
                         $this->exec_query("update {$tp}job set is_failed=true where id=?", $r['job_id']);
@@ -552,7 +565,7 @@ class JobExecutor extends sqlHelper{
                  }elseif(is_array($rv)){
                     list($jobName, $param, $ctx, $delay) = $rv;
                     if(!(is_scalar($jobName) && is_array($param) && is_array($ctx) && is_numeric($delay))){
-                         throw new \Exception("Invalid parameters have been returned from job for new job execution");
+                         throw new \JobRunException("Invalid parameters have been returned from job for new job execution");
                     }
                     $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
                     $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
@@ -566,23 +579,27 @@ class JobExecutor extends sqlHelper{
                  $this->releaseSavepoint();
                  $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} processed");
               }catch(\Exception $e){
-                 if($e instanceof \PDOException && preg_match('/^40/', $exc->errorInfo[0]) && $deadlockTryCount>5){
+                 if(($e instanceof \PDOException && preg_match('/^40/', $exc->errorInfo[0]) || preg_match('/[Dd]eadlock|Lock wait timeout exceeded/', $e->getMessage()))){
                     $deadlockTryCount++;
-                    $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} serialization failure: {$e->getMessage()}");
-                    $this->rollbackToSavepoint();
-                    $this->releaseSavepint();
-                    $this->releaseLock('job-manager-' . $r['id']);
+                    $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} serialization failure: {$e->getMessage()}");
+                    $this->log->debug(print_r($e,1));
+                    $this->rollback();
                     continue;
                  }
                  $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} throws exception " . get_class($e) . ' with message ' . $e->getMessage());
+                 $this->log->info(" $logPrefix <{$job->getName()}> Got exception:" . $e->getMessage());
                  $this->log->trace("rollback to savepoint");
                  $this->rollbackToSavepoint();
                  $this->exec_query("update {$tp}job_step set is_failed=true where id=?", $r['id']);
                  $this->exec_query("update {$tp}job set last_error=?, is_failed=true where id=?", $e->getMessage(), $r['job_id']);
+                 $this->commit();
+                 continue;
+              }finally{
+                 $rv = $this->releaseLock($lockName);
+                 $this->log->debug(" $logPrefix releaseLock returned $rv");
               }
-              $this->releaseSavepoint();
+              $this->commit();
               $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} completed");
-              $this->releaseLock('job-manager-' . $r['id']);
             }
         }
     }
@@ -612,7 +629,8 @@ class JobExecutor extends sqlHelper{
         $dbh = $this->getDbh();
 
         $cb = function($sth){
-          return $sth->rowCount();
+          $cnt =  $sth->rowCount();
+          return $cnt;
         };
 
         $param = array_slice(func_get_args(),1);
@@ -746,6 +764,15 @@ class JobExecutor extends sqlHelper{
         }
     }
 
+    function rollback(){
+        $this->exec_query("rollback");
+        $this->txnLevel=0;
+    }
+
+    function commit(){
+        $this->exec_query("commit");
+        $this->txnLevel=0;
+    }
     function rollbackToSavepoint(){
         $this->txnLevel--;
         if($this->txnLevel==0){
