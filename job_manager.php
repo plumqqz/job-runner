@@ -459,7 +459,7 @@ class JobExecutor extends sqlHelper{
               $this->setSavepoint();
 
               $job = $this->jobs[$r['name']];
-              if(!$this->fetch_value("select 1 from {$tp}job_step js where not js.is_failed and js.id=? for update", $r['id'])){
+              if(!$this->fetch_value("select 1 from {$tp}job_step js where not js.is_failed and js.id=? and run_after<now() for update", $r['id'])){
                   $this->log->debug(" $logPrefix Record was processed by another process; will continue");
                   $this->releaseSavepoint();
                   $this->releaseLock($lockName);
@@ -520,16 +520,8 @@ class JobExecutor extends sqlHelper{
 
                  if($this->dbDriver == 'pgsql'){
                      $cnt = $this->exec_query("update {$tp}job set val=?, first_step_started_at=to_timestamp(?), last_step_finished_at=to_timestamp(?) where id=?", $val, $time, time(), $r['job_id']);
-                     if($cnt<>1){
-                        $this->log->error("Update query returns 0 rows");
-                        #throw new JobRunException("Update query returns 0 rows");
-                     }
                  }else{
                      $cnt = $this->exec_query("update {$tp}job set val=?, first_step_started_at=from_unixtime(?), last_step_finished_at=from_unixtime(?) where id=?", $val, $time, time(), $r['job_id']);
-                     if($cnt<>1){
-                        $this->log->info("Update query returns $cnt rows");
-                        #throw new JobRunException("Update query returns 0 rows");
-                     }
                  }
                  if($r['last_step'] && !$rv){
                         $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
