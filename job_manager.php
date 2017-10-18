@@ -352,8 +352,8 @@ class JobExecutor extends sqlHelper{
           return $jobId;
       }catch(Exception $e){
           $this->exec_query("rollback");
-          $this->log->error(" $logPrefix <$jobName> Cannot store job into repository");
-          throw new Exception("Cannot store $jobName into repository",0, $e);
+          $this->log->error(" $logPrefix <$jobName> Cannot store job into repository:" . $e->getMessage());
+          throw new Exception("Cannot store $jobName into repository:" . $e->getMessage(), 0, $e);
       }
     }
 
@@ -593,6 +593,26 @@ class JobExecutor extends sqlHelper{
               $this->commit();
               $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} completed");
             }
+        }
+    }
+
+    function testJob($job, $param){
+        $steps = $job->getSteps();
+        $ctx = [];
+        foreach($steps as $st){
+          if(is_callable($st)){
+             $st($param,$ctx,$this);
+          }elseif(is_array($st)){
+             foreach($st as $s){
+                if(is_callable($s)){
+                     $st($param,$ctx,$this);
+                }else{
+                     throw new Exception("Unknown step type in job");
+                }
+             }
+          }else{
+                 throw new Exception("Unknown step type in job");
+          }
         }
     }
  }
