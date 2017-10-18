@@ -601,11 +601,11 @@ class JobExecutor extends sqlHelper{
         $ctx = [];
         foreach($steps as $st){
           if(is_callable($st)){
-             $st($param,$ctx,$this);
+             while($st($param,$ctx,$this)){};
           }elseif(is_array($st)){
              foreach($st as $s){
                 if(is_callable($s)){
-                     $st($param,$ctx,$this);
+                     while($st($param,$ctx,$this)){};
                 }else{
                      throw new Exception("Unknown step type in job");
                 }
