@@ -366,6 +366,9 @@ class JobExecutor extends sqlHelper{
         $this->releaseSavepoint();
     }
 
+    function getLog(){
+        return $this->log;
+    }
     function listJobs($jobLike = '%'){
         $tp = $this->tp;
         return $this->fetch_query("select * from {$tp}job where name like ?", $jobLike);
@@ -601,11 +604,25 @@ class JobExecutor extends sqlHelper{
         $ctx = [];
         foreach($steps as $st){
           if(is_callable($st)){
-             while($st($param,$ctx,$this)){};
+             while(true){
+               $this->setSavepoint();
+               if(!$st($param,$ctx,$this)){
+                  $this->releaseSavepoint();
+                  break;
+               }
+               $this->releaseSavepoint();
+             }
           }elseif(is_array($st)){
              foreach($st as $s){
                 if(is_callable($s)){
-                     while($st($param,$ctx,$this)){};
+                     while(true){
+                       $this->setSavepoint();
+                       if(!$st($param,$ctx,$this)){
+                          $this->releaseSavepoint();
+                          break;
+                       }
+                       $this->releaseSavepoint();
+                     }
                 }else{
                      throw new Exception("Unknown step type in job");
                 }
