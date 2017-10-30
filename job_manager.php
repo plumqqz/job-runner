@@ -35,6 +35,25 @@ create table job_step_depends_on(
   primary key(job_step_id, depends_on_step_id)
 )
 
+delimiter //
+drop procedure if exists jobs.execute//
+create procedure jobs.execute(name varchar(128), param text, run_after datetime)
+begin
+  declare iid bigint;
+  declare all_param text default concat('{"name":"',name,'", "param":',param,'}');
+  declare exit handler for sqlexception begin
+   rollback work to savepoint execute_svp;
+   resignal;
+  end;
+  savepoint execute_svp;
+  insert into jobs.job(name,parameters,hash) values('.execute',all_param, md5(all_param));
+  set iid = last_insert_id();
+  insert into jobs.job_step(job_id,pos,run_after) values(iid,0,coalesce(run_after,now()));
+  release savepoint execute_svp;
+end;
+//
+
+
 
 Postgres
 CREATE TABLE public.job
@@ -363,6 +382,17 @@ class JobExecutor extends sqlHelper{
         $rc = $this->exec_query("update {$tp}job_step set is_failed=false, try_count=case when try_count is null then null else 1 end where job_id=?", $jobId);
         if($rc)
             $this->exec_query("update {$tp}job set is_failed=false where id=?", $jobId);
+        $this->releaseSavepoint();
+    }
+
+    function deleteJob($jobId){
+        $this->setSavepoint();
+        $tp = $this->tp;
+        if(!$this->fetch_value("select 1 from {$tp}job where id=? for update", $jobId)){
+          throw new Exception("Job with is=$jobId was not found");
+        }
+        $this->exec_query("delete from {$tp}job_step where job_id=?", $jobId);
+        $this->exec_query("delete from {$tp}job where id=?", $jobId);
         $this->releaseSavepoint();
     }
 
