@@ -140,7 +140,7 @@ CREATE TABLE public.job_step_depends_on
             if($this->logFile)
                 fwrite($this->logFile, "$str\n");
             else{
-                error_log("Log destination file is not opened; error message is $msg");
+                error_log("Log destination file is not opened; error message is $str");
             }
        }
        function printLine($level, $msg, $opt = null){
@@ -431,7 +431,7 @@ class JobExecutor extends sqlHelper{
         $this->exec_query("delete from {$tp}job_step_depends_on where not exists(select * from {$tp}job_step js where js.id=job_step_depends_on.depends_on_step_id)");
     }
 
-    function run($jobLike = [ '%' ]){
+    function run($jobLike = [ '%' ], $callback = null ){
         $logPrefix = 'JobExecutor#run[pid=' . getmypid() . ']';
         $this->log->debug(" $logPrefix started");
         $tp = $this->tp;
@@ -455,6 +455,7 @@ class JobExecutor extends sqlHelper{
                            limit 1000', ...$jobLike
                         );
            if(!$rs){
+                if($callback) $callback();
                 $this->log->debug(" $logPrefix No data, going to sleep and continue");
                 $toSleep = $toSleep > 5 ? 5 : $toSleep+0.2;
                 usleep($toSleep*1000000);
@@ -548,7 +549,7 @@ class JobExecutor extends sqlHelper{
 
                  $val2 = $this->fetch_value("select val from ${tp}job j where j.id=? for update", $r['job_id']);
                  $val2 = json_decode($val2,1);
-                 $val = array_merge($val2,$decoded_val);
+                 $val = array_merge(@$val2,@$decoded_val);
                  $val = json_encode($decoded_val);
 
                  if($this->dbDriver == 'pgsql'){
@@ -636,11 +637,14 @@ class JobExecutor extends sqlHelper{
           if(is_callable($st)){
              while(true){
                $this->setSavepoint();
-               if(!$st($param,$ctx,$this)){
+               $rv = $st($param,$ctx,$this);
+               if(!$rv){
                   $this->releaseSavepoint();
                   break;
                }
                $this->releaseSavepoint();
+               $this->getLog()->info("testJob: timeout " . $rv);
+               sleep($rv);
              }
           }elseif(is_array($st)){
              foreach($st as $s){
