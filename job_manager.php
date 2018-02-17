@@ -257,6 +257,22 @@ class JobExecutor extends sqlHelper{
     private $tp="";
     private $log;
     private $callCount=0;
+    private $currentJobId;
+    private $currentStepId;
+
+    function setCurrentJobId($jid){
+       $this->currentJobId = $jid;
+    }
+    function getCurrentJobId(){
+       return $this->currentJobId;
+    }
+    function setCurrentStepId($sid){
+      $this->currentStepId = $sid;
+    }
+    function getCurrentStepId(){
+      return $this->currentStepId;
+    }
+
 
     function __construct($dbh=null, $tp = "", $logger=null){
          $this->log = $logger ?: new JobLogger(getenv("JOB_MANAGER_LOGLVL") ?: JobLogger::TRACE);
@@ -283,7 +299,7 @@ class JobExecutor extends sqlHelper{
         $this->jobs[$job->getName()] = $job;
     }
 
-    function execute($jobName, $param, $ctx = null, $delay = 0, $depends_on = []){
+    function execute($jobName, $param, $ctx = [], $delay = 0, $depends_on = [], $dependants = []){
       $logPrefix = 'JobExecutor#execute[pid=' . getmypid() . ']';
       $jobStepStartTs = date('Y-m-d H:i:s', time()+$delay);
 
@@ -321,9 +337,9 @@ class JobExecutor extends sqlHelper{
             $this->log->trace(" $logPrefix <$jobName> Transaction started");
             $rc = 0;
             if($this->dbDriver == 'pgsql'){
-                $rc = $this->exec_query("insert into {$tp}job(parameters, val, name, hash ) values(?,?,?,?) on conflict(name,hash) do nothing", json_encode($param), $ctx ?: '{}', $jobName, $hash);
+                $rc = $this->exec_query("insert into {$tp}job(parameters, val, name, hash ) values(?,?,?,?) on conflict(name,hash) do nothing", json_encode($param), json_encode($ctx), $jobName, $hash);
             }else{
-                $rc = $this->exec_query("insert into {$tp}job(parameters, val, name, hash ) values(?,?,?,?) on duplicate key update hash=hash", json_encode($param), $ctx ?: '{}', $jobName, $hash);
+                $rc = $this->exec_query("insert into {$tp}job(parameters, val, name, hash ) values(?,?,?,?) on duplicate key update hash=hash", json_encode($param), json_encode($ctx), $jobName, $hash);
             }
             if(!$rc){
                  $this->releaseSavepoint();
@@ -366,12 +382,20 @@ class JobExecutor extends sqlHelper{
               $ids = [];
               $pos++;
             }
-          $this->releaseSavepoint();
-          $this->log->debug(" $logPrefix <$jobName> Stored into repository");
-          return $jobId;
+
+            $lastIds = $prevIds[count($prevIds)-1];
+            $lastIds = is_array($lastIds) ? $lastIds : [ $lastIds ];
+            foreach($dependants as $d){
+                foreach($lastIds as $lid){
+                    $this->exec_query("insert into {$tp}job_step_depends_on(job_step_id, depends_on_step_id) values(?,?)", $d, $lid);
+                }
+            }
+            $this->releaseSavepoint();
+            $this->log->debug(" $logPrefix <$jobName> Stored into repository");
+            return $jobId;
       }catch(Exception $e){
-          $this->exec_query("rollback");
           $this->log->error(" $logPrefix <$jobName> Cannot store job into repository:" . $e->getMessage());
+          $this->exec_query("rollback");
           throw new Exception("Cannot store $jobName into repository:" . $e->getMessage(), 0, $e);
       }
     }
@@ -391,6 +415,8 @@ class JobExecutor extends sqlHelper{
         if(!$this->fetch_value("select 1 from {$tp}job where id=? for update", $jobId)){
           throw new Exception("Job with is=$jobId was not found");
         }
+        $this->exec_query("delete from {$tp}job_step_depends_on where exists(select * from {$tp}job_step js where js.id=job_step_depends_on.job_step_id and js.job_id=?)", $jobId);
+        $this->exec_query("delete from {$tp}job_step_depends_on where exists(select * from {$tp}job_step js where js.id=job_step_depends_on.depends_on_step_id and js.job_id=?)", $jobId);
         $this->exec_query("delete from {$tp}job_step where job_id=?", $jobId);
         $this->exec_query("delete from {$tp}job where id=?", $jobId);
         $this->releaseSavepoint();
@@ -429,6 +455,19 @@ class JobExecutor extends sqlHelper{
         $this->exec_query("delete from {$tp}job where not exists(select * from {$tp}job_step js where job.id=js.job_id) and job.is_done");
         $this->exec_query("delete from {$tp}job_step_depends_on where not exists(select * from {$tp}job_step js where js.id=job_step_depends_on.job_step_id)");
         $this->exec_query("delete from {$tp}job_step_depends_on where not exists(select * from {$tp}job_step js where js.id=job_step_depends_on.depends_on_step_id)");
+    }
+
+    function listDependantSteps(){
+        $tp = $this->tp;
+        $rv = [];
+        foreach(
+          $this->fetch_query("select jd.job_step_id
+                              from {$tp}job_step_depends_on jd, {$tp}job_step js
+                             where jd.depends_on_step_id=js.id and js.job_id=?", $this->getCurrentJobId())
+          as $r){
+           $rv[]=$r['job_step_id'];
+        }
+        return $rv;
     }
 
     function run($jobLike = [ '%' ], $callback = null ){
@@ -543,39 +582,44 @@ class JobExecutor extends sqlHelper{
 
 
                  $time = time();
+                 $this->setCurrentJobId($r['job_id']);
+                 $this->setCurrentStepId($r['id']);
                  $rv = $fn($decoded_param, $decoded_val, $this, $r);
+                 $this->setCurrentJobId(null);
+                 $this->setCurrentStepId(null);
                  $deadlockTryCount = 0;
                  $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} returned $val for parameters:{$param} context:{$val}");
 
                  $val2 = $this->fetch_value("select val from ${tp}job j where j.id=? for update", $r['job_id']);
                  $val2 = json_decode($val2,1);
                  $val = array_merge(@$val2,@$decoded_val);
-                 $val = json_encode($decoded_val);
+                 $val2 = json_encode($val);
 
                  if($this->dbDriver == 'pgsql'){
-                     $cnt = $this->exec_query("update {$tp}job set val=?, first_step_started_at=to_timestamp(?), last_step_finished_at=to_timestamp(?) where id=?", $val, $time, time(), $r['job_id']);
+                     $cnt = $this->exec_query("update {$tp}job set val=?, first_step_started_at=to_timestamp(?), last_step_finished_at=to_timestamp(?) where id=?", $val2, $time, time(), $r['job_id']);
                  }else{
-                     $cnt = $this->exec_query("update {$tp}job set val=?, first_step_started_at=from_unixtime(?), last_step_finished_at=from_unixtime(?) where id=?", $val, $time, time(), $r['job_id']);
+                     $cnt = $this->exec_query("update {$tp}job set val=?, first_step_started_at=from_unixtime(?), last_step_finished_at=from_unixtime(?) where id=?", $val2, $time, time(), $r['job_id']);
                  }
                  if($r['last_step'] && !$rv){
                         $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
-                        @list($djval, $jid) = $this->fetch_list("select j.val, j.id
+                        foreach( $this->fetch_query("select j.id
                                                           from {$tp}job j, {$tp}job_step js, {$tp}job_step_depends_on jsdo 
                                                          where j.id=js.job_id and js.id=jsdo.job_step_id and jsdo.depends_on_step_id=?
-                                                         limit 1
-                                                         ",
-                                           $r['id']);
-                        $this->log->debug("Try to update caller context: val = $val");
-                        if($jid){
-                            $djval = json_decode($djval,1);
-                            $djval = array_merge($decoded_val, $djval);
-                            $this->exec_query("update {$tp}job set val=? where id=?", json_encode($djval), $jid);
+                                                         for update",
+                                                   $r['id'])
+                                 as $dj){
+                            $jid = $dj['id'];
+                            if($jid){
+                                $djval = $this->fetch_value("select val from {$tp}job j where j.id=? for update", $jid);
+                                $djval = json_decode($djval,1);
+                                $djval = array_merge($djval, $val);
+                                $this->exec_query("update {$tp}job set val=? where id=?", json_encode($djval), $jid);
+                            }
                         }
-
                  }
                  if(!$rv || is_numeric($rv) && $rv<0){
-                    #$this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
-                    #$this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
+                    $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
+                    $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
                     $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
                     if(is_numeric($rv) && $rv<0){
                         $this->exec_query("update {$tp}job set is_failed=true where id=?", $r['job_id']);
@@ -589,14 +633,15 @@ class JobExecutor extends sqlHelper{
                         $this->exec_query("update {$tp}job_step js set run_after=coalesce(from_unixtime(?), now()) where js.id=?", time()+$wait, $r['id']);
                      }
                  }elseif(is_array($rv)){
-                    list($jobName, $param, $ctx, $delay) = $rv;
-                    if(!(is_scalar($jobName) && is_array($param) && is_array($ctx) && is_numeric($delay))){
+                    @list($jobName, $param, $ctx, $delay, $dependants) = $rv;
+                    $dependants = $dependants ?: [];
+                    if(!(is_scalar($jobName) && is_array($param) && is_array($ctx) && is_numeric($delay) && is_array($dependants))){
                          throw new \JobRunException("Invalid parameters have been returned from job for new job execution");
                     }
                     $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
                     $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
                     $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
-                    $jobId = $this->execute($jobName, $param, $ctx, $delay);
+                    $jobId = $this->execute($jobName, $param, $ctx, $delay, [], $dependants);
                     $this->exec_query("insert into {$tp}job_step_depends_on(job_step_id, depends_on_step_id)
                                                    select * from(select j1.id, (select max(j2.id) from {$tp}job_step j2 where j2.job_id=?) as did from {$tp}job_step j1 where j1.job_id=? and j1.pos=?) as t where t.did is not null",
                                        $jobId, $r['job_id'], $r['pos']+1);

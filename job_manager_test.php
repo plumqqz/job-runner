@@ -3,20 +3,32 @@ include_once("job_manager.php");
 #$dbh = new PDO('mysql:host=localhost;port=3306;dbname=jobs', 'root','');
 $dbh = new PDO('pgsql:host=localhost;port=5433;dbname=work', 'postgres','root');
 $je = new JobExecutor($dbh);
+#$je->deleteJob($argv[1]);
+#exit;
 #$je->setDbh($dbh);
 
 $jobWaiter = new Job("Waiter");
 $jobWaiter->submit(function($param, &$ctx){
+                  if(@$ctx['waiter_done']){
+                      return null;
+                  }
                   if(!@$ctx['wait']){
                       $ctx['wait']=1;
                       print "--------------------------------->wait\n";
                       return 1;
                   }
-                  return;
-            })->submit(function($param, &$ctx){
-                  print "=================================>waited!\n";
-                  $ctx=[];
-                  $ctx['waiter_done']=1;
+                  return null;
+            })->submit(function($param, &$ctx, $je){
+                if(@$ctx['waiter_done']) {
+                    $ctx['waiter_done']++;
+                    print "#################################!\n";
+                    return null;
+                }
+                print "=================================>waited!\n";
+                $ctx=[];
+                $ctx['waiter_done']=1;
+                #$je->execute( 'Waiter', ['time' => time().getmypid()], ['waiter_done'=>1], 0, [], $je->listDependantSteps());
+                return null;
             });
 
 $job = new Job("RUN#1");
@@ -25,7 +37,8 @@ $job->submit(function($param, &$ctx){
                    $ctx['val1']=0;
                    $ctx['valx']=0;
                    print "In #1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";
-                   return [ 'Waiter', ['time' => time()],[],1];
+                   return [ 'Waiter', ['time' => time()],[],0];
+                   return null;
              })
     ->submit([ function($param, &$ctx){
                    print "In #2.1 param[name]={$param['name']} ctx[val]={$ctx['val']}\n";        
@@ -44,7 +57,7 @@ $job->submit(function($param, &$ctx){
                    $ctx['valx']++;
                    if($ctx['valx']==4){
                       #$je->execute('sendmail', [ 'to' => 'lala@dodo.com', 'subject' => 'Just subject', 'body' => $param['name'] ]); 
-                      $je->execute('.execute', ['name' => 'sendmail', 'param' => [ 'to' => 'lala@dodo.com', 'subject' => 'Just subject', 'body' => $param['name'] ] ]); 
+                      #$je->execute('.execute', ['name' => 'sendmail', 'param' => [ 'to' => 'lala@dodo.com', 'subject' => 'Just subject', 'body' => $param['name'] ] ]); 
                    }
                    $je->exec_query('insert into cnt(val) values(1)');
                    if($ctx['valx']<6){
@@ -82,7 +95,10 @@ $sendMailJob->submit( function($param, &$ctx){
             });
 
 $je->add($sendMailJob);
-$je->resumeJob(120378);
+#$je->resumeJob(120378);
+    $je->execute("RUN#1", [ "path" => 1, "name"=>'Name'.time() . getmypid() ]);	
+$je->run(['%'],function(){ print "idle ";});
+exit;
 
 if(!count($je->listNotEndedJobs('RUN#1'))){
     $je->execute("RUN#1", [ "path" => 1, "name"=>'Name'.time() . getmypid() ]);	
@@ -91,4 +107,3 @@ if(!count($je->listNotEndedJobs('RUN#1'))){
 }
 $onceJob = new Job("once");
 #$je->run(['RUN#1', 'sendmail', '.execute']);
-$je->run();
