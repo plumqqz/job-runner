@@ -592,6 +592,12 @@ class JobExecutor extends sqlHelper{
 
                  $val2 = $this->fetch_value("select val from ${tp}job j where j.id=? for update", $r['job_id']);
                  $val2 = json_decode($val2,1);
+                 if(!@$val2 || !is_array(@$val2)){
+                      $val2=[];
+                 }
+                 if(!@$decoded_val || !is_array(@$decoded_val)){
+                      $decoded_val=[];
+                 }
                  $val = array_merge(@$val2,@$decoded_val);
                  $val2 = json_encode($val);
 

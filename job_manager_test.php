@@ -17,7 +17,7 @@ $jobWaiter->submit(function($param, &$ctx){
                       print "--------------------------------->wait\n";
                       return 1;
                   }
-                  return null;
+                  return ["user-payout", ['user'=>1, 'rnd' => rand() ], [], 0 ];
             })->submit(function($param, &$ctx, $je){
                 if(@$ctx['waiter_done']) {
                     $ctx['waiter_done']++;
@@ -25,6 +25,7 @@ $jobWaiter->submit(function($param, &$ctx){
                     return null;
                 }
                 print "=================================>waited!\n";
+                print ">> ctx[payed]={$ctx['payed']}<<\n";
                 $ctx=[];
                 $ctx['waiter_done']=1;
                 #$je->execute( 'Waiter', ['time' => time().getmypid()], ['waiter_done'=>1], 0, [], $je->listDependantSteps());
@@ -79,6 +80,7 @@ $je->add($job);
 $payoutJob = new Job("user-payout");
 $payoutJob->submit( function($param, &$ctx, $je){
                              print "Payout to user {$param['to']}\n";
+                             $ctx['payed']=1;
                     });
 $je->add($payoutJob);
 $je->add($jobWaiter);
