@@ -560,6 +560,9 @@ class JobExecutor extends sqlHelper{
               try{
                  $decoded_param = json_decode($param,1);
                  $decoded_val   = json_decode($val,1);
+                 if(!is_array($decoded_val)){
+                    $decoded_val = [];
+                 }
                  $this->log->trace("set savepoint");
                  $this->setSavepoint();
                  if($param && !is_array($decoded_param)){
