@@ -837,8 +837,7 @@ class JobExecutor extends sqlHelper{
 
     function getLock($lockName){
         if($this->dbDriver == 'pgsql'){
-           $this->exec_query('select pg_advisory_xact_lock(?)', crc32($lockName));
-           return 1;
+           return $this->fetch_value('select pg_try_advisory_xact_lock(?)', crc32($lockName));
         }else{
            return $this->fetch_value('select get_lock(?,0)', $lockName);
         }
