@@ -613,8 +613,7 @@ class JobExecutor extends sqlHelper{
                         $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
                         foreach( $this->fetch_query("select j.id
                                                           from {$tp}job j, {$tp}job_step js, {$tp}job_step_depends_on jsdo 
-                                                         where j.id=js.job_id and js.id=jsdo.job_step_id and jsdo.depends_on_step_id=?
-                                                         for update",
+                                                         where j.id=js.job_id and js.id=jsdo.job_step_id and jsdo.depends_on_step_id=?",
                                                    $r['id'])
                                  as $dj){
                             $jid = $dj['id'];
@@ -627,8 +626,8 @@ class JobExecutor extends sqlHelper{
                         }
                  }
                  if(!$rv || is_numeric($rv) && $rv<0){
-                    $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
-                    $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
+                    #$this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
+                    #$this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
                     $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
                     if(is_numeric($rv) && $rv<0){
                         $this->exec_query("update {$tp}job set is_failed=true where id=?", $r['job_id']);
@@ -662,6 +661,7 @@ class JobExecutor extends sqlHelper{
                  if(($e instanceof \PDOException && preg_match('/^40/', $exc->errorInfo[0]) || preg_match('/[Dd]eadlock|Lock wait timeout exceeded/', $e->getMessage()))){
                     $deadlockTryCount++;
                     $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} serialization failure: {$e->getMessage()}");
+                    $this->log->info(" $logPrefix <{$job->getName()}> Stack trace: {$e->getTraceAsString()}");
                     $this->log->debug(print_r($e,1));
                     $this->rollback();
                     continue;
