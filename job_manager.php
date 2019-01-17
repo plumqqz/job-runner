@@ -191,9 +191,9 @@ CREATE TABLE public.job_step_depends_on
         private $log;
         private $cb;
 
-        function __construct($name){
+        function __construct($name, $log=null){
             $this->name = $name;
-            $this->log = new JobLogger(getenv("JOB_MANAGER_LOGLVL") ?: JobLogger::INFO);
+            $this->log = $log ?: new JobLogger(getenv("JOB_MANAGER_LOGLVL") ?: JobLogger::INFO);
             $this->log->debug(" <{$this->name}> Create new job with name $name");
             return $this;
         }
@@ -281,7 +281,7 @@ class JobExecutor extends sqlHelper{
          if($dbh)
             $this->setDbh($dbh);
 
-         $job = new Job('.execute');
+         $job = new Job('.execute', $this->log);
          $job->submit(function($param, &$ctx, $je){
              try{
                  $je->execute(@$param['name'], @$param['param'], @$param['ctx'], @$param['delay']);
