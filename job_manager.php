@@ -635,6 +635,8 @@ class JobExecutor extends sqlHelper{
                         $this->exec_query("update {$tp}job set is_failed=true where id=?", $r['job_id']);
                     }
                     $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
+                 }elseif($rv instanceof \Exception){
+                        $this->exec_query("update {$tp}job set is_failed=true, last_error=? where id=?", $r['job_id'], $ex->getMessage());
                  }elseif(is_numeric($rv)){
                      $wait = $rv;
                      if($this->dbDriver == 'pgsql'){
