@@ -97,6 +97,29 @@ CREATE TABLE public.job_step_depends_on
  --  CONSTRAINT job_step_depends_on_job_step_id_fkey FOREIGN KEY (job_step_id)
  --      REFERENCES public.job_step (id) MATCH SIMPLE
  --      ON UPDATE NO ACTION ON DELETE NO ACTION 
+CREATE OR REPLACE FUNCTION jobs.delete_job(jid bigint)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+begin
+  perform from jobs.job where id=jid for update;
+  delete from jobs.job_step_depends_on where exists(select * from jobs.job_step js where js.id=job_step_depends_on.job_step_id and js.job_id=jid);
+  delete from jobs.job_step_depends_on where exists(select * from jobs.job_step js where js.id=job_step_depends_on.depends_on_step_id and js.job_id=jid);
+  delete from jobs.job_step where job_id=jid;
+  delete from jobs.job where id=jid;
+end;
+$function$
+
+CREATE OR REPLACE FUNCTION jobs.resume_job(jid bigint)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+begin
+   update jobs.job_step set is_failed=false, try_count=case when try_count is null then null else 1 end where job_id=jid;
+   update jobs.job set is_failed=false where id=jid;
+end;
+$function$
+
 );
 */
     class JobSubmitException extends Exception{};
