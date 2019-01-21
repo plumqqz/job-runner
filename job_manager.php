@@ -622,7 +622,7 @@ class JobExecutor extends sqlHelper{
                             if($jid){
                                 $djval = $this->fetch_value("select val from {$tp}job j where j.id=? for update", $jid);
                                 $djval = json_decode($djval,1);
-                                $djval = array_merge($djval, $val);
+                                $djval = array_merge($val, $djval);
                                 $this->exec_query("update {$tp}job set val=? where id=?", json_encode($djval), $jid);
                             }
                         }
@@ -636,7 +636,7 @@ class JobExecutor extends sqlHelper{
                     }
                     $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
                  }elseif($rv instanceof \Exception){
-                        $this->exec_query("update {$tp}job set is_failed=true, last_error=? where id=?", $r['job_id'], $rv->getMessage());
+                        $this->exec_query("update {$tp}job set is_failed=true, last_error=? where id=?", $rv->getMessage(), $r['job_id']);
                  }elseif(is_numeric($rv)){
                      $wait = $rv;
                      if($this->dbDriver == 'pgsql'){
