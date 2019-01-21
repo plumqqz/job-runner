@@ -121,7 +121,7 @@ CREATE TABLE public.job_step_depends_on
        }
 
        function openFile(){
-            $logFileName = 'job-runner-' . date('Y-m-d') . '.log';
+            $logFileName = (getenv('JOB_MANAGER_LOGPREFIX')?:'job-runner-') . date('Y-m-d') . '.log';
             if($this->lastLogFileName == $logFileName){
                 return;
             }
@@ -636,7 +636,7 @@ class JobExecutor extends sqlHelper{
                     }
                     $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
                  }elseif($rv instanceof \Exception){
-                        $this->exec_query("update {$tp}job set is_failed=true, last_error=? where id=?", $r['job_id'], $ex->getMessage());
+                        $this->exec_query("update {$tp}job set is_failed=true, last_error=? where id=?", $r['job_id'], $rv->getMessage());
                  }elseif(is_numeric($rv)){
                      $wait = $rv;
                      if($this->dbDriver == 'pgsql'){
