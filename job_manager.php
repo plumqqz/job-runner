@@ -97,6 +97,7 @@ CREATE TABLE public.job_step_depends_on
  --  CONSTRAINT job_step_depends_on_job_step_id_fkey FOREIGN KEY (job_step_id)
  --      REFERENCES public.job_step (id) MATCH SIMPLE
  --      ON UPDATE NO ACTION ON DELETE NO ACTION 
+);
 CREATE OR REPLACE FUNCTION jobs.delete_job(jid bigint)
  RETURNS void
  LANGUAGE plpgsql
@@ -120,7 +121,6 @@ begin
 end;
 $function$
 
-);
 */
     class JobSubmitException extends Exception{};
     class JobExecuteException extends Exception{};
@@ -342,6 +342,13 @@ class JobExecutor extends sqlHelper{
          $this->log->error(" $logPrefix <$jobName> Passed \$ctx for jobName $jobName neither null nor array");
          throw new JobExecuteException("Passed ctx is not a string");
       }
+      if(!array_reduce($depends_on, function($a, $b) { return $a && is_int($b); }, true)){
+         throw new JobExecuteException("Passed \$depends_on is not array of ints");
+      }
+
+      if(!array_reduce($dependants, function($a, $b) { return $a && is_int($b); }, true)){
+         throw new JobExecuteException("Passed \$depends_on is not array of ints");
+      }
 
       ksort($param);
       $tp = $this->tp;
@@ -490,6 +497,19 @@ class JobExecutor extends sqlHelper{
                              where jd.depends_on_step_id=js.id and js.job_id=?", $this->getCurrentJobId())
           as $r){
            $rv[]=$r['job_step_id'];
+        }
+        return $rv;
+    }
+
+    function listNextSteps($limit=1){
+        $tp = $this->tp;
+        $rv = [];
+        foreach($this->fetch_query("select js.id from {$tp}job_step js where js.job_id=? and js.pos>(select js1.pos from {$tp}job_step js1 where js1.id=?) order by js.pos limit ?",
+                                   $this->getCurrentJobId(),
+                                   $this->getCurrentStepId(),
+                                   $limit
+                                  ) as $r){
+                $rv[] = $r['id'];
         }
         return $rv;
     }
