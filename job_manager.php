@@ -80,7 +80,7 @@ CREATE TABLE public.job_step
   subpos integer,
   is_failed boolean DEFAULT false,
   run_once boolean default false,
-  run_after timestamp without time zone,
+  run_after timestamp,
   CONSTRAINT job_step_pkey PRIMARY KEY (id),
   CONSTRAINT job_step_job_id_fkey FOREIGN KEY (job_id)
       REFERENCES public.job (id) MATCH SIMPLE
@@ -342,7 +342,7 @@ class JobExecutor extends sqlHelper{
          $this->log->error(" $logPrefix <$jobName> Passed \$ctx for jobName $jobName neither null nor array");
          throw new JobExecuteException("Passed ctx is not a string");
       }
-      if(!array_reduce($depends_on, function($a, $b) { return $a && is_int($b); }, true)){
+      if($depends_on && !array_reduce($depends_on, function($a, $b) { return $a && is_int($b); }, true)){
          throw new JobExecuteException("Passed \$depends_on is not array of ints");
       }
 
@@ -632,7 +632,13 @@ class JobExecutor extends sqlHelper{
                  $time = time();
                  $this->setCurrentJobId($r['job_id']);
                  $this->setCurrentStepId($r['id']);
+                 $txnLevelBefore = $this->getTxnLevel();
                  $rv = $fn($decoded_param, $decoded_val, $this, $r);
+                 $txnLevelAfter = $this->getTxnLevel();
+                 if($txnLevelBefore!=$txnLevelAfter){
+                    $this->getLog()->warn("It seems job(id=%s, name=%s step=%s)  left non-released or non-rollbacked savepoint: before level $txnLevelBefore!=$txnLevelAfter",
+                                         [ $r['job_id'], $job->getName(), $r['id'] ]);
+                 }
                  $this->setCurrentJobId(null);
                  $this->setCurrentStepId(null);
                  $deadlockTryCount = 0;
@@ -925,6 +931,9 @@ class JobExecutor extends sqlHelper{
       rollback transaction or just rollback to savepoint?
     */
     private $txnLevel=0;
+    function getTxnLevel(){
+       return $this->txnLevel;
+    }
     function setSavepoint(){
 
         if($this->txnLevel==0){
@@ -940,6 +949,7 @@ class JobExecutor extends sqlHelper{
     }
 
     function releaseSavepoint(){
+        $level = $this->txnLevel;
         $this->txnLevel--;
         if($this->txnLevel<0){
            $this->txnLevel=0;
@@ -947,8 +957,10 @@ class JobExecutor extends sqlHelper{
         }
         if($this->txnLevel==0){
             $this->exec_query("commit");
+            $this->getLog()->debug("commit");
         }else{
             $this->exec_query("release savepoint job_exec_{$this->txnLevel}");
+            $this->getLog()->debug("Release savepoint level {$level}");
         }
     }
 
@@ -971,8 +983,10 @@ class JobExecutor extends sqlHelper{
 
         if($this->txnLevel==0){
             $this->exec_query("rollback");
+            $this->getLog()->debug("rollback");
         }else{
             $this->exec_query("rollback to savepoint job_exec_{$this->txnLevel}");
+            $this->getLog()->debug("Rollback savepoint level {$this->txnLevel}");
         }
     }
 
