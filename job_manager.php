@@ -277,6 +277,11 @@ $function$
     }
 
 class JobExecutor extends sqlHelper{
+    const DELETE_CURRENT_JOB = 'DELETE';
+    public static function DELETE_CURRENT_JOB(){
+      return JobExecutor::DELETE_CURRENT_JOB;
+    }
+
     private $jobs=[];
     private $tp="";
     private $log;
@@ -775,6 +780,10 @@ class JobExecutor extends sqlHelper{
                  throw new Exception("Unknown step type in job");
           }
         }
+    }
+
+    function rvDelete(){
+       return 'DELETE';
     }
  }
  class sqlHelper{
