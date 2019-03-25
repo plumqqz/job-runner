@@ -519,7 +519,7 @@ class JobExecutor extends sqlHelper{
         return $rv;
     }
 
-    function run($jobLike = [ '%' ], $callback = null ){
+    function run($jobLike = [ '%' ], $callback = null, $filterCallback = null ){
         $logPrefix = 'JobExecutor#run[pid=' . getmypid() . ']';
         $this->log->debug(" $logPrefix started");
         $tp = $this->tp;
@@ -551,6 +551,10 @@ class JobExecutor extends sqlHelper{
            }
            $toSleep = 0;
            foreach($rs as $r){
+              if($filterCallback){
+                  $r = $filterCallback($r);
+                  if(!$r) continue;
+              }
               $this->log->debug(" $logPrefix database queried");
               $this->log->debug(" $logPrefix Got row to execute, trying to hold lock on it");
               $lockName = 'job-manager-' . $r['id'];
@@ -757,6 +761,7 @@ class JobExecutor extends sqlHelper{
                   $this->releaseSavepoint();
                   break;
                }
+               if($rv instanceof Exception) throw $rv;
                $this->releaseSavepoint();
                $this->getLog()->info("testJob: timeout " . $rv);
                sleep($rv);
