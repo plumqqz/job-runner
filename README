@@ -170,3 +170,22 @@ $job->submit([
     ....
 ]);
 
+Тестирование:
+Метод testJob
+
+$job = include("jobs/test/issue-token.php");
+$job = $job();
+
+$je = new JobExecutor(getDbh(),"jobs.");
+$je->testJob($job,  [ 
+                      "amount"=>"1.13",
+                      'incoming_txid' => 'tx1',
+                    ] );
+
+Выполняет указанный job без репозитария (и без персистетного сохранения, разумеется)
+Таймауты работают прямым sleep
+
+$je->stressTestJob($job, $param, $times=1)
+
+Выполняет указанный job для каждого шага $times раз с одним и тем же контекстом, эмулируя
+сбои в работе.

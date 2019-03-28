@@ -126,6 +126,7 @@ $function$
     class JobExecuteException extends Exception{};
     class JobRunException extends Exception{};
     class JobTxnLevelUnderflow extends Exception{};
+    class JobStressTestException extends Exception{};
     class JobLogger{
        const PANIC = 0;
        const ERROR = 1;
@@ -143,6 +144,9 @@ $function$
             $this->level = $ll;
        }
 
+       function getLogLevel(){
+            return $this->level;
+       }
        function openFile(){
             $logFileName = (getenv('JOB_MANAGER_LOGPREFIX')?:'job-runner-') . date('Y-m-d') . '.log';
             if($this->lastLogFileName == $logFileName){
@@ -461,6 +465,9 @@ class JobExecutor extends sqlHelper{
     function getLog(){
         return $this->log;
     }
+    function setLog($log){
+        $this->log = $log;
+    }
     function listJobs($jobLike = '%'){
         $tp = $this->tp;
         return $this->fetch_query("select * from {$tp}job where name like ?", $jobLike);
@@ -747,6 +754,71 @@ class JobExecutor extends sqlHelper{
               }
             }
         }
+    }
+
+    function stressTestJob($job, $param, int $times=2, array $throws=[], int $throwCnt=3){
+        $steps = $job->getSteps();
+        $ctx = [];
+        foreach($steps as $st){
+          if(is_callable($st)){
+             while(true){
+               $this->setSavepoint();
+               for($j=0;$j<$times;$j++){
+                   $savedCtx = $ctx;
+                   while(true){
+                       try{
+                           $rv = $st($param,$ctx,$this);
+                       }catch(JobStressTestException $ex){
+                           $ctx = $savedCtx;
+                           continue;
+                       }
+                       break;
+                   }
+                   if($rv==JobExecutor::DELETE_CURRENT_JOB) return;
+                   if($j<$times-1) $ctx = $savedCtx;
+               }
+               if(!$rv){
+                  $this->releaseSavepoint();
+                  break;
+               }
+               if($rv instanceof Exception) throw $rv;
+               $this->releaseSavepoint();
+               $this->getLog()->info("testJob: timeout " . $rv);
+               sleep($rv);
+             }
+          }elseif(is_array($st)){
+             foreach($st as $s){
+                 while(true){
+                   $this->setSavepoint();
+                   for($j=0;$j<$times;$j++){
+                       $savedCtx = $ctx;
+                       while(true){
+                           try{
+                               $rv = $s($param,$ctx,$this);
+                           }catch(JobStressTestException $ex){
+                               $ctx = $savedCtx;
+                               continue;
+                           }
+                           break;
+                       }
+                       if($rv==JobExecutor::DELETE_CURRENT_JOB) return;
+                       if($j<$times-1) $ctx = $savedCtx;
+                   }
+                   if(!$rv){
+                      $this->releaseSavepoint();
+                      break;
+                   }
+                   if($rv instanceof Exception) throw $rv;
+                   $this->releaseSavepoint();
+                   $this->getLog()->info("testJob: timeout " . $rv);
+                   sleep($rv);
+                 }
+             }
+          }else{
+                 throw new Exception("Unknown step type in job");
+          }
+        }
+        $this->setLog($oldLog);
     }
 
     function testJob($job, $param){
