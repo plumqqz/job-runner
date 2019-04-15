@@ -173,7 +173,7 @@ $function$
        }
        function printLine($level, $msg, $opt = null){
             $this->openFile();
-            $msg = vsprintf($msg, $opt);
+            $msg = vsprintf($msg, $opt); // @phan-suppress-current-line PhanPluginPrintfVariableFormatString
             $outString = 'job-runner [' . date('Y-m-d H-i-s') . "] $level: $msg";
             $this->writeToLog($outString);
        }
@@ -222,7 +222,6 @@ $function$
             $this->name = $name;
             $this->log = $log ?: new JobLogger(getenv("JOB_MANAGER_LOGLVL") ?: JobLogger::INFO);
             $this->log->debug(" <{$this->name}> Create new job with name $name");
-            return $this;
         }
         function getName(){
             return $this->name;
@@ -232,7 +231,7 @@ $function$
             return $this->steps;
         }
 
-        function getRunOnce(){
+        function getRunOnce(): array{
             return $this->runOnce;
         }
 
@@ -285,6 +284,17 @@ class JobExecutor extends sqlHelper{
     public static function DELETE_CURRENT_JOB(){
       return JobExecutor::DELETE_CURRENT_JOB;
     }
+    const CURRENT_JOB_DONE = 'DONE';
+    public static function CURRENT_JOB_DONE(){
+      return JobExecutor::CURRENT_JOB_DONE;
+    }
+    public static function END_CURRENT_JOB(){
+      return JobExecutor::CURRENT_JOB_DONE;
+    }
+    const CONTINUE_CURRENT_JOB = 'CONTINUE';
+    public static function CONTINUE_CURRENT_JOB(){
+      return JobExecutor::CONTINUE_CURRENT_JOB;
+    }
 
     private $jobs=[];
     private $tp="";
@@ -332,7 +342,7 @@ class JobExecutor extends sqlHelper{
         $this->jobs[$job->getName()] = $job;
     }
 
-    function execute($jobName, $param, $ctx = [], $delay = 0, $depends_on = [], $dependants = []){
+    function execute($jobName, $param, $ctx = [], $delay = 0, $depends_on = [], $dependants = []): int{
       $logPrefix = 'JobExecutor#execute[pid=' . getmypid() . ']';
       $jobStepStartTs = date('Y-m-d H:i:s', time()+$delay);
 
@@ -384,7 +394,7 @@ class JobExecutor extends sqlHelper{
             if(!$rc){
                  $this->releaseSavepoint();
                  $this->log->debug(" $logPrefix <$jobName> Job $jobName with parameters hash equals to $hash already has been executed. Returning");
-                 return;
+                 throw new JobExecuteException("<$jobName> Job $jobName with parameters hash equals to $hash already has been executed. Returning");
             }
             $jobId = $this->lastInsertId("{$tp}job_id_seq");
             $this->log->debug(" $logPrefix <$jobName> row inserted with id=$jobId");
@@ -676,7 +686,7 @@ class JobExecutor extends sqlHelper{
                  }else{
                      $cnt = $this->exec_query("update {$tp}job set val=?, first_step_started_at=from_unixtime(?), last_step_finished_at=from_unixtime(?) where id=?", $val2, $time, time(), $r['job_id']);
                  }
-                 if($r['last_step'] && !$rv){
+                 if($r['last_step'] && !$rv || $rv=='DONE'){
                         $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
                         foreach( $this->fetch_query("select j.id
                                                           from {$tp}job j, {$tp}job_step js, {$tp}job_step_depends_on jsdo 
@@ -692,17 +702,20 @@ class JobExecutor extends sqlHelper{
                             }
                         }
                  }
-                 if(!$rv || is_numeric($rv) && $rv<0){
+                 if(!$rv || $rv=='DONE' || is_numeric($rv) && $rv<0){
                     $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
                     $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
                     $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
+                    if($rv=='DONE'){
+                        $this->exec_query("delete from {$tp}job_step where job_id=?", $r['job_id']);
+                    }
                     if(is_numeric($rv) && $rv<0){
                         $this->exec_query("update {$tp}job set is_failed=true where id=?", $r['job_id']);
                     }
                     $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} done and deleted");
                  }elseif($rv instanceof \Exception){
                         $this->exec_query("update {$tp}job set is_failed=true, last_error=? where id=?", $rv->getMessage(), $r['job_id']);
-                 }elseif(is_numeric($rv)){
+                 }elseif(is_numeric($rv) || $rv=='CONTINUE'){
                      $wait = $rv;
                      if($this->dbDriver == 'pgsql'){
                         $this->exec_query("update {$tp}job_step js set run_after=coalesce(to_timestamp(?), now()) where js.id=?", time()+$wait, $r['id']);
@@ -732,7 +745,7 @@ class JobExecutor extends sqlHelper{
                  $this->releaseSavepoint();
                  $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} completed");
               }catch(\Exception $e){
-                 if(($e instanceof \PDOException && preg_match('/^40/', $exc->errorInfo[0]) || preg_match('/[Dd]eadlock|Lock wait timeout exceeded/', $e->getMessage()))){
+                 if(($e instanceof \PDOException && preg_match('/^40/', $e->errorInfo[0]) || preg_match('/[Dd]eadlock|Lock wait timeout exceeded/', $e->getMessage()))){
                     $deadlockTryCount++;
                     $this->log->info(" $logPrefix <{$job->getName()}> Step #{$r['pos']} serialization failure: {$e->getMessage()}");
                     $this->log->info(" $logPrefix <{$job->getName()}> Stack trace: {$e->getTraceAsString()}");
@@ -783,8 +796,10 @@ class JobExecutor extends sqlHelper{
                }
                if($rv instanceof Exception) throw $rv;
                $this->releaseSavepoint();
-               $this->getLog()->info("testJob: timeout " . $rv);
-               sleep($rv);
+               if(is_numeric($rv)){
+                   $this->getLog()->info("testJob: timeout " . $rv);
+                   sleep($rv);
+               }
              }
           }elseif(is_array($st)){
              foreach($st as $s){
@@ -818,7 +833,6 @@ class JobExecutor extends sqlHelper{
                  throw new Exception("Unknown step type in job");
           }
         }
-        $this->setLog($oldLog);
     }
 
     function testJob($job, $param){
@@ -835,8 +849,10 @@ class JobExecutor extends sqlHelper{
                }
                if($rv instanceof Exception) throw $rv;
                $this->releaseSavepoint();
-               $this->getLog()->info("testJob: timeout " . $rv);
-               sleep($rv);
+               if(is_numeric($rv)){
+                   $this->getLog()->info("testJob: timeout " . $rv);
+                   sleep($rv);
+               }
              }
           }elseif(is_array($st)){
              foreach($st as $s){
@@ -859,8 +875,11 @@ class JobExecutor extends sqlHelper{
         }
     }
 
-    function rvDelete(){
+    function rvDelete(): string{
        return 'DELETE';
+    }
+    function rvContinue(): string{
+       return 'CONTINUE';
     }
  }
  class sqlHelper{
@@ -883,6 +902,8 @@ class JobExecutor extends sqlHelper{
       then it will be called with already executed, but not fetched statement
       If such callback is not specified then default callback will be used.
       The callback just returns affected rows
+    */
+    /**
     */
     function execQuery(){
         return call_user_func_array([$this,'exec_query'],func_get_args());
@@ -910,6 +931,9 @@ class JobExecutor extends sqlHelper{
             $err = $dbh->errorInfo(); $err = $err[2];
             throw new \Exception("Cannot prepare query:" . $err);
         }
+
+        if(count($param)==1 && is_array($param[0]))
+            $param=$param[0];
 
         if(!$sth->execute($param)){
             $err = $sth->errorInfo(); $err = $err[2];
@@ -1031,7 +1055,6 @@ class JobExecutor extends sqlHelper{
             $this->exec_query("savepoint job_exec_{$this->txnLevel}");
         }
         $this->txnLevel++;
-        $this->getLog()->debug("Set savepoint level {$this->txnLevel}");
     }
 
     function releaseSavepoint(){
@@ -1043,10 +1066,8 @@ class JobExecutor extends sqlHelper{
         }
         if($this->txnLevel==0){
             $this->exec_query("commit");
-            $this->getLog()->debug("commit");
         }else{
             $this->exec_query("release savepoint job_exec_{$this->txnLevel}");
-            $this->getLog()->debug("Release savepoint level {$level}");
         }
     }
 
@@ -1061,7 +1082,6 @@ class JobExecutor extends sqlHelper{
     }
     function rollbackToSavepoint(){
         $this->txnLevel--;
-        $this->getLog()->debug("Level {$this->txnLevel}");
         if($this->txnLevel<0){
            $this->txnLevel=0;
            throw new JobTxnLevelUnderflow('txnLevel underflow');
@@ -1069,10 +1089,8 @@ class JobExecutor extends sqlHelper{
 
         if($this->txnLevel==0){
             $this->exec_query("rollback");
-            $this->getLog()->debug("rollback");
         }else{
             $this->exec_query("rollback to savepoint job_exec_{$this->txnLevel}");
-            $this->getLog()->debug("Rollback savepoint level {$this->txnLevel}");
         }
     }
 
@@ -1082,7 +1100,7 @@ class JobExecutor extends sqlHelper{
 function callStack($stacktrace) {
     $rv = "";
     foreach($stacktrace as $node) {
-        $rv .= "$i. ".basename($node['file']) .":" .$node['function'] ."(" .$node['line'].")\n";
+        $rv .= basename($node['file']) .":" .$node['function'] ."(" .$node['line'].")\n";
     }
     return $rv;
 }
