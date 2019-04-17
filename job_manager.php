@@ -96,7 +96,7 @@ CREATE TABLE public.job_step_depends_on
  --      ON UPDATE NO ACTION ON DELETE NO ACTION,
  --  CONSTRAINT job_step_depends_on_job_step_id_fkey FOREIGN KEY (job_step_id)
  --      REFERENCES public.job_step (id) MATCH SIMPLE
- --      ON UPDATE NO ACTION ON DELETE NO ACTION 
+ --      ON UPDATE NO ACTION ON DELETE NO ACTION
 );
 CREATE OR REPLACE FUNCTION jobs.delete_job(jid bigint)
  RETURNS void
@@ -128,25 +128,36 @@ $function$
     class JobTxnLevelUnderflow extends Exception{};
     class JobStressTestException extends Exception{};
     class JobLogger{
+       /** @var int */
        const PANIC = 0;
+       /** @var int */
        const ERROR = 1;
+       /** @var int */
        const WARN  = 2;
+       /** @var int */
        const WARNING = 2;
+       /** @var int */
        const INFO = 3;
+       /** @var int */
        const DEBUG = 4;
+       /** @var int */
        const TRACE = 5;
 
+       /** @var string */
        private $lastLogFileName = null;
+       /** @var resource */
        private $logFile = null;
+       /** @var int */
        private $level;
 
-       function __construct($ll){
+       function __construct(int $ll){
             $this->level = $ll;
        }
 
-       function getLogLevel(){
+       function getLogLevel(): int{
             return $this->level;
        }
+       /** @return void */
        function openFile(){
             $logFileName = (getenv('JOB_MANAGER_LOGPREFIX')?:'job-runner-') . date('Y-m-d') . '.log';
             if($this->lastLogFileName == $logFileName){
@@ -163,7 +174,8 @@ $function$
             }
             $this->lastLogFileName = $logFileName;
        }
-       function writeToLog($str){
+       /** @return void */
+       function writeToLog(string $str){
             $str = preg_replace("/\r?\n|\n\r?/",'\\n',$str);
             if($this->logFile)
                 fwrite($this->logFile, "$str\n");
@@ -171,86 +183,157 @@ $function$
                 error_log("Log destination file is not opened; error message is $str");
             }
        }
-       function printLine($level, $msg, $opt = null){
+       /**
+         * @param string $msg
+         * @param array<string>|null $opt
+         * @return void
+         */
+       function printLine(string $level, string $msg, array $opt = null){
             $this->openFile();
-            $msg = vsprintf($msg, $opt); // @phan-suppress-current-line PhanPluginPrintfVariableFormatString
+            $msg = vsprintf($msg, $opt); // @phan-suppress-current-line PhanPluginPrintfVariableFormatString,PhanTypeMismatchArgumentInternal
             $outString = 'job-runner [' . date('Y-m-d H-i-s') . "] $level: $msg";
             $this->writeToLog($outString);
        }
-       function panic($msg, $opt = null){
+       /**
+         * @param string $msg
+         * @param ?array<mixed> $opt
+         * @return void
+         */
+       function panic(string $msg, array $opt = null){
             if($this->level <= JobLogger::PANIC)
                 return;
             $this->printLine('PANIC', $msg, $opt);
        }
-       function error($msg, $opt = null){
+       /**
+         * @param string $msg
+         * @param ?array<mixed> $opt
+         * @return void
+         */
+       function error(string $msg, array $opt = null){
             if($this->level <= JobLogger::ERROR)
                 return;
             $this->printLine('ERROR', $msg, $opt);
        }
-       function warn($msg, $opt = null){
+       /**
+         * @param string $msg
+         * @param ?array<mixed> $opt
+         * @return void
+         */
+       function warn(string $msg, array $opt = null){
             if($this->level <= JobLogger::WARN)
                 return;
             $this->printLine('WARN', $msg, $opt);
        }
-       function info($msg, $opt = null){
+       /**
+         * @param string $msg
+         * @param ?array<mixed> $opt
+         * @return void
+         */
+       function info(string $msg, array $opt = null){
             if($this->level <= JobLogger::INFO)
                 return;
             $this->printLine('INFO', $msg, $opt);
        }
-       function debug($msg, $opt = null){
+       /**
+         * @param string $msg
+         * @param ?array<mixed> $opt
+         * @return void
+         */
+       function debug(string $msg, array $opt = null){
             if($this->level <= JobLogger::DEBUG)
                 return;
             $this->printLine('DEBUG', $msg, $opt);
        }
+       /**
+         * @param string $msg
+         * @param ?array<mixed> $opt
+         * @return void
+         */
        function trace($msg, $opt = null){
             if($this->level <= JobLogger::TRACE)
                 return;
             $this->printLine('TRACE', $msg, $opt);
        }
-        
+
     }
 
     class Job{
         private $steps = [];
         private $runOnce = [];
+        /** @var string */
         private $name;
+        /** @var array<mixed> */
         private $param;
+        /** @var object $log */
         private $log;
+        /** @var callable(array<mixed>,array<mixed>,object):void */
         private $cb;
 
+        /**
+         * @param string name
+         * @param ?object= $log
+        */
         function __construct($name, $log=null){
             $this->name = $name;
             $this->log = $log ?: new JobLogger(getenv("JOB_MANAGER_LOGLVL") ?: JobLogger::INFO);
             $this->log->debug(" <{$this->name}> Create new job with name $name");
         }
-        function getName(){
+        function getName(): string{
             return $this->name;
         }
 
-        function getSteps(){
+        /**
+         * @return array<callable(array,array,JobExecutor):(mixed|object|array)|array<callable(array,array,JobExecutor):(mixed|object|array)>>
+         */
+        function getSteps(): array{
             return $this->steps;
         }
 
+        /**
+         * @return array<mixed>
+         */
         function getRunOnce(): array{
             return $this->runOnce;
         }
 
+        /**
+         * @param array<mixed> $param
+         * @return Job
+         */
         function submitOnce($param){
             return $this->submit($param, true);
         }
 
+        /**
+         * @param callable(array<mixed>,array<mixed>,object):void $fn
+         * @return void
+         */
         function setCallback($fn){
             $this->setCb($fn);
         }
+
+        /**
+         * @param callable(array,array,object):void $fn
+         * @return void
+         */
         function setCb($fn){
             if(!is_callable($fn)){
                 throw new JobSubmitException("Passed param is not function");
             }
             $this->cb = $fn;
         }
+        /**
+         * @return callable(array,array,object):void $fn
+         */
         function getCb(){
             return $this->cb;
         }
+        /**
+         * @param array{} $param
+         * @param callable(array{},array{}&,JobExecutor):(mixed|array|object) $param
+         * @return Job
+         * @throws JobSubmitException
+         */
         function submit($param, $isOnce=0){
             $this->log->debug(" <{$this->name}> Submit new steps; isOnce=$isOnce");
             if(is_callable($param)){
@@ -268,55 +351,84 @@ $function$
                 $this->steps[] = $param;
                 $this->runOnce[] = $isOnce;
             }else{
-                $this->log->error(" <{$this->name}> Passed param neither function nor array of functions"); 
+                $this->log->error(" <{$this->name}> Passed param neither function nor array of functions");
                 throw new JobSubmitException("Passed param neither function nor array of functions");
             }
             return $this;
         }
-        
+
+        /** @return void */
         function end(){
             return;
         }
     }
 
 class JobExecutor extends sqlHelper{
+    /** @var string */
     const DELETE_CURRENT_JOB = 'DELETE';
-    public static function DELETE_CURRENT_JOB(){
+    public static function DELETE_CURRENT_JOB(): string{
       return JobExecutor::DELETE_CURRENT_JOB;
     }
+    /** @var string */
     const CURRENT_JOB_DONE = 'DONE';
-    public static function CURRENT_JOB_DONE(){
+    public static function CURRENT_JOB_DONE(): string{
       return JobExecutor::CURRENT_JOB_DONE;
     }
-    public static function END_CURRENT_JOB(){
+    public static function END_CURRENT_JOB(): string{
       return JobExecutor::CURRENT_JOB_DONE;
     }
+    /** @var string */
     const CONTINUE_CURRENT_JOB = 'CONTINUE';
-    public static function CONTINUE_CURRENT_JOB(){
+    public static function CONTINUE_CURRENT_JOB(): string{
       return JobExecutor::CONTINUE_CURRENT_JOB;
     }
 
+    /** @var array<Job|array<Job>> */
     private $jobs=[];
+    /** @var string */
     private $tp="";
+    /** @var object */
     private $log;
+    /** @var int */
     private $callCount=0;
+    /** @var int */
     private $currentJobId;
+    /** @var int */
     private $currentStepId;
 
+    /**
+     * @param int $jid
+     * @return void
+     */
     function setCurrentJobId($jid){
        $this->currentJobId = $jid;
     }
+    /**
+     * @return int
+     */
     function getCurrentJobId(){
        return $this->currentJobId;
     }
+    /**
+     * @param int $sid
+     * @return void
+     */
     function setCurrentStepId($sid){
       $this->currentStepId = $sid;
     }
+    /**
+     * @return int
+     */
     function getCurrentStepId(){
       return $this->currentStepId;
     }
 
 
+    /**
+     * @param object $dbh
+     * @param string $tp
+     * @param ?object= $logger
+     */
     function __construct($dbh=null, $tp = "", $logger=null){
          $this->log = $logger ?: new JobLogger(getenv("JOB_MANAGER_LOGLVL") ?: JobLogger::TRACE);
          $this->tp = $tp;
@@ -324,24 +436,44 @@ class JobExecutor extends sqlHelper{
             $this->setDbh($dbh);
 
          $job = new Job('.execute', $this->log);
+         /**
+          * @param array{name:string,param:array,ctx?:array,delay?:int} $param
+          * @param array<string,mixed|array|object> $ctx
+          * @param JobExecutor $je
+          * @return null
+          */
          $job->submit(function($param, &$ctx, $je){
              try{
                  $je->execute(@$param['name'], @$param['param'], @$param['ctx'], @$param['delay']);
              }catch(Exception $e){
                  $this->log->error("Internal executor: Cannot submit job {$param['name']} : {$e->getMessage()}");
              }
+             return null;
          });
          $this->add($job);
     }
 
+    /**
+     * @param Job $job
+     * @return void
+     */
     function add(Job $job){
         $this->log->debug("JobExecutor: add new job {$job->getName()}");
         $arr = $job->getSteps();
         if(is_array($arr[count($arr)-1]))
-            $job->submit(function(){});
+            $job->submit(function(){}); // @phan-suppress-current-line PhanTypeMismatchArgument
         $this->jobs[$job->getName()] = $job;
     }
 
+    /**
+     * @param string $jobName
+     * @param array<string,mixed|array|object|null> $param
+     * @param array<string,mixed|array|object|null>|null= $ctx
+     * @param int= delay
+     * @param array<int>= $depends_on
+     * @param array<int>= $dependants
+     * @return int
+     */
     function execute($jobName, $param, $ctx = [], $delay = 0, $depends_on = [], $dependants = []): int{
       $logPrefix = 'JobExecutor#execute[pid=' . getmypid() . ']';
       $jobStepStartTs = date('Y-m-d H:i:s', time()+$delay);
@@ -361,11 +493,11 @@ class JobExecutor extends sqlHelper{
          $this->log->error(" $logPrefix <$jobName> Passed \$ctx for jobName $jobName neither null nor array");
          throw new JobExecuteException("Passed ctx is not a string");
       }
-      if($depends_on && !array_reduce($depends_on, function($a, $b) { return $a && is_int($b); }, true)){
+      if($depends_on && !array_reduce($depends_on, function(int $a, int $b): bool { return $a && is_int($b); }, true)){
          throw new JobExecuteException("Passed \$depends_on is not array of ints");
       }
 
-      if(!array_reduce($dependants, function($a, $b) { return $a && is_int($b); }, true)){
+      if(!array_reduce($dependants, function(int $a, int $b): bool { return $a && is_int($b); }, true)){
          throw new JobExecuteException("Passed \$depends_on is not array of ints");
       }
 
@@ -450,7 +582,11 @@ class JobExecutor extends sqlHelper{
       }
     }
 
-    function resumeJob($jobId){
+    /**
+     * @param int $jobId
+     * @return void
+     */
+    function resumeJob(int $jobId){
         $this->setSavepoint();
         $tp = $this->tp;
         $rc = $this->exec_query("update {$tp}job_step set is_failed=false, try_count=case when try_count is null then null else 1 end where job_id=?", $jobId);
@@ -459,6 +595,10 @@ class JobExecutor extends sqlHelper{
         $this->releaseSavepoint();
     }
 
+    /**
+     * @param int $jobId
+     * @return void
+     */
     function deleteJob($jobId){
         $this->setSavepoint();
         $tp = $this->tp;
@@ -472,37 +612,68 @@ class JobExecutor extends sqlHelper{
         $this->releaseSavepoint();
     }
 
+    /**
+     * @return object
+     */
     function getLog(){
         return $this->log;
     }
+    /**
+     * @param object $log
+     * @return void
+     */
     function setLog($log){
         $this->log = $log;
     }
+
+    /**
+     * @param string= $jobLike
+     * @return array<array<string,mixed>>
+     */
     function listJobs($jobLike = '%'){
         $tp = $this->tp;
         return $this->fetch_query("select * from {$tp}job where name like ?", $jobLike);
     }
 
+    /**
+     * @param string= $jobLike
+     * @return array<array<string,mixed>>
+     */
     function listEndedJobs($jobLike = '%'){
         $tp = $this->tp;
         return $this->fetch_query("select * from {$tp}job j where j.name like ? and j.is_done", $jobLike);
     }
 
+    /**
+     * @param string= $jobLike
+     * @return array<array<string,mixed>>
+     */
     function listNotEndedJobs($jobLike = '%'){
         $tp = $this->tp;
         return $this->fetch_query("select * from {$tp}job j where j.name like ? and not j.is_done", $jobLike);
     }
 
+    /**
+     * @param string= $jobLike
+     * @return array<array<string,mixed>>
+     */
     function listFailedJobs($jobLike = '%'){
         $tp = $this->tp;
         return $this->fetch_query("select * from {$tp}job j where j.name like ? and j.is_failed", $jobLike);
     }
 
+    /**
+     * @param int $jobId
+     * @return int
+     */
     function getJobLastStepId($jobId){
         $tp = $this->tp;
         return $this->fetch_value("select js.id from {$tp}job_step js where js.job_id=? order by js.pos desc limit 1", $jobId);
     }
 
+    /**
+     * @return void
+     */
     function cleanUp(){
         $tp = $this->tp;
         $this->exec_query("delete from {$tp}job where not exists(select * from {$tp}job_step js where job.id=js.job_id) and job.is_done");
@@ -510,6 +681,9 @@ class JobExecutor extends sqlHelper{
         $this->exec_query("delete from {$tp}job_step_depends_on where not exists(select * from {$tp}job_step js where js.id=job_step_depends_on.depends_on_step_id)");
     }
 
+    /**
+     * @return array<int>
+     */
     function listDependantSteps(){
         $tp = $this->tp;
         $rv = [];
@@ -523,6 +697,10 @@ class JobExecutor extends sqlHelper{
         return $rv;
     }
 
+    /**
+     * @param int= $limit
+     * @return array<int>
+     */
     function listNextSteps($limit=1){
         $tp = $this->tp;
         $rv = [];
@@ -536,6 +714,12 @@ class JobExecutor extends sqlHelper{
         return $rv;
     }
 
+    /**
+     * @param string[]= $jobLike
+     * @param callable():void= $callback
+     * @param callable(array<string,mixed>):array<string,mixed>|false= $filterCallback
+     * @return void
+     */
     function run($jobLike = [ '%' ], $callback = null, $filterCallback = null ){
         $logPrefix = 'JobExecutor#run[pid=' . getmypid() . ']';
         $this->log->debug(" $logPrefix started");
@@ -551,12 +735,12 @@ class JobExecutor extends sqlHelper{
                          from {$tp}job_step j1,
                           {$tp}job j
                          where not exists(select * from {$tp}job_step_depends_on jsd, {$tp}job_step j2 where jsd.job_step_id=j1.id and jsd.depends_on_step_id=j2.id)
-                           and not j1.is_failed 
+                           and not j1.is_failed
                            and not j.is_done
                            and not j.is_failed
                            and j1.run_after<=now()
                            and j.id=j1.job_id
-                           and (" . join(' or ', array_map( function($v){ return 'j.name like ?';}, $jobLike)) . ')
+                           and (" . join(' or ', array_map( function(string $v): string{ return 'j.name like ?';}, $jobLike)) . ')
                            limit 1000', ...$jobLike
                         );
            if(!$rs){
@@ -628,8 +812,8 @@ class JobExecutor extends sqlHelper{
 
               list($param, $val) = $this->fetch_list("select parameters, val from {$tp}job j where j.id=?", $r['job_id']);
               try{
-                 $decoded_param = json_decode($param,1);
-                 $decoded_val   = json_decode($val,1);
+                 $decoded_param = json_decode($param,true);
+                 $decoded_val   = json_decode($val,true);
                  if(!is_array($decoded_val)){
                     $decoded_val = [];
                  }
@@ -647,7 +831,7 @@ class JobExecutor extends sqlHelper{
                        $this->setSavepoint();
                        try{
                            $cb = $job->getCb();
-                           $cb($decoded_param, $decoded_val, $this);
+                           $cb((array)$decoded_param, (array)$decoded_val, $this);
                            $this->log->trace("Callback handler is done");
                        }finally{
                            $this->releaseSavepoint();
@@ -659,7 +843,7 @@ class JobExecutor extends sqlHelper{
                  $this->setCurrentJobId($r['job_id']);
                  $this->setCurrentStepId($r['id']);
                  $txnLevelBefore = $this->getTxnLevel();
-                 $rv = $fn($decoded_param, $decoded_val, $this, $r);
+                 $rv = $fn((array)$decoded_param, $decoded_val, $this, $r);
                  $txnLevelAfter = $this->getTxnLevel();
                  if($txnLevelBefore!=$txnLevelAfter){
                     $this->getLog()->warn("It seems job(id=%s, name=%s step=%s)  left non-released or non-rollbacked savepoint: before level $txnLevelBefore!=$txnLevelAfter",
@@ -689,7 +873,7 @@ class JobExecutor extends sqlHelper{
                  if($r['last_step'] && !$rv || $rv=='DONE'){
                         $this->exec_query("update {$tp}job set is_done=true where id=?", $r['job_id']);
                         foreach( $this->fetch_query("select j.id
-                                                          from {$tp}job j, {$tp}job_step js, {$tp}job_step_depends_on jsdo 
+                                                          from {$tp}job j, {$tp}job_step js, {$tp}job_step_depends_on jsdo
                                                          where j.id=js.job_id and js.id=jsdo.job_step_id and jsdo.depends_on_step_id=?",
                                                    $r['id'])
                                  as $dj){
@@ -716,7 +900,7 @@ class JobExecutor extends sqlHelper{
                  }elseif($rv instanceof \Exception){
                         $this->exec_query("update {$tp}job set is_failed=true, last_error=? where id=?", $rv->getMessage(), $r['job_id']);
                  }elseif(is_numeric($rv) || $rv=='CONTINUE'){
-                     $wait = $rv;
+                     $wait = is_numeric($rv) ? $rv : 0;
                      if($this->dbDriver == 'pgsql'){
                         $this->exec_query("update {$tp}job_step js set run_after=coalesce(to_timestamp(?), now()) where js.id=?", time()+$wait, $r['id']);
                      }else{
@@ -769,7 +953,15 @@ class JobExecutor extends sqlHelper{
         }
     }
 
-    function stressTestJob($job, $param, int $times=2, array $throws=[], int $throwCnt=3){
+    /**
+     * @param Job $job
+     * @param array<string,mixed|array> $param
+     * @param int= $times
+     * @param array<Throwable> $throws
+     * @param int= $throwCnt
+     * @return void
+     */
+    function stressTestJob(Job $job, array $param, int $times=2, array $throws=[], int $throwCnt=3){
         $steps = $job->getSteps();
         $ctx = [];
         foreach($steps as $st){
@@ -835,6 +1027,11 @@ class JobExecutor extends sqlHelper{
         }
     }
 
+    /**
+     * @param Job $job
+     * @param array<string,mixed|array> $param
+     * @return void
+     */
     function testJob($job, $param){
         $steps = $job->getSteps();
         $ctx = [];
@@ -883,13 +1080,22 @@ class JobExecutor extends sqlHelper{
     }
  }
  class sqlHelper{
+    /** @var object */
     private $dbh = null;
+    /** @var string */
     protected $dbDriver;
 
+    /**
+     * @return object
+     */
     function getDbh(){
         return $this->dbh;
     }
 
+    /**
+     * @param object
+     * @return void
+     */
     function setDbh($pDbh){
         $this->dbh = $pDbh;
         $this->dbDriver = $this->getDbh()->getAttribute(\PDO::ATTR_DRIVER_NAME);
@@ -903,14 +1109,20 @@ class JobExecutor extends sqlHelper{
       If such callback is not specified then default callback will be used.
       The callback just returns affected rows
     */
-    /**
+    /** @suppress PhanPluginUnknownMethodReturnType
     */
     function execQuery(){
         return call_user_func_array([$this,'exec_query'],func_get_args());
     }
-    function exec_query($qry){
+    /** @suppress PhanPluginUnknownMethodReturnType
+    */
+    function exec_query(string $qry){
         $dbh = $this->getDbh();
 
+        /**
+         * @param object $sth
+         * @return int
+         */
         $cb = function($sth){
           $cnt =  $sth->rowCount();
           return $cnt;
@@ -946,13 +1158,24 @@ class JobExecutor extends sqlHelper{
       It's just a small wrapped about function above.
       The wrapped supplies the callbach which will fetch all rows and return array
     */
+    /**
+      * @return array<array<string,mixed>>
+      */
+
     function fetchQuery(){
         return call_user_func_array([$this,'fetch_query'],func_get_args());
     }
-    function fetch_query($query){
+    /**
+      @suppress PhanTypeMismatchReturn
+      * @return array<array<string,mixed>>
+      */
+    function fetch_query(string $query){
       return call_user_func_array([$this,  'exec_query'],
                                     array_merge(func_get_args(),
                                     [
+                                        /** @param object $sth
+                                          * @return array<array<string,mixed>>
+                                        */
                                         function($sth){
                                            $res = $sth->fetchAll();
                                            return $res;
@@ -962,13 +1185,24 @@ class JobExecutor extends sqlHelper{
                                  );
     }
 
+    /**
+      @suppress PhanTypeMismatchReturn
+      * @return array<string,mixed>
+      */
     function fetchRow(){
         return call_user_func_array([$this,'fetch_row'],func_get_args());
     }
+    /**
+      @suppress PhanTypeMismatchReturn
+      * @return array<string,mixed>
+      */
     function fetch_row(){
       return call_user_func_array( [$this, 'exec_query'],
                                     array_merge(func_get_args(),
                                     [
+                                        /** @param object $sth
+                                          * @return array<array<string,mixed>>
+                                          */
                                         function($sth){
                                            $res = $sth->fetch();
 
@@ -982,14 +1216,24 @@ class JobExecutor extends sqlHelper{
                                  );
     }
 
+    /**
+      * @return array<mixed>
+      */
     function fetchList(){
         return call_user_func_array([$this,'fetch_list'],func_get_args());
     }
 
+    /**
+      @suppress PhanTypeMismatchReturn
+      * @return array<mixed>
+      */
     function fetch_list(){
       return call_user_func_array( [ $this, 'exec_query'],
                                     array_merge(func_get_args(),
                                     [
+                                        /** @param object $sth
+                                          * @return array<array<string,mixed>>
+                                          */
                                         function($sth){
                                            $res = $sth->fetch(\PDO::FETCH_NUM);
 
@@ -1003,14 +1247,24 @@ class JobExecutor extends sqlHelper{
                                  );
     }
 
+    /**
+      * @return mixed
+      */
     function fetchValue(){
       return @call_user_func_array([$this, 'fetch_list'], func_get_args())[0];
     }
 
+    /**
+      * @return mixed
+      */
     function fetch_value(){
       return @call_user_func_array([$this, 'fetch_list'], func_get_args())[0];
     }
 
+    /**
+      * @param string $sqname
+      * @return int
+      */
     function lastInsertId($sqname=null){
         if($this->dbDriver == 'pgsql')
           return $this->getDbh()->lastInsertId($sqname);
@@ -1018,6 +1272,10 @@ class JobExecutor extends sqlHelper{
           return $this->getDbh()->lastInsertId();
     }
 
+    /**
+      * @param string $lockName
+      * @return int
+      */
     function getLock($lockName){
         if($this->dbDriver == 'pgsql'){
            return $this->fetch_value('select pg_try_advisory_xact_lock(?)', crc32($lockName));
@@ -1026,6 +1284,10 @@ class JobExecutor extends sqlHelper{
         }
     }
 
+    /**
+      * @param string $lockName
+      * @return int
+      */
     function releaseLock($lockName){
         if($this->dbDriver == 'pgsql'){
            return 1;
@@ -1033,19 +1295,25 @@ class JobExecutor extends sqlHelper{
            return $this->fetch_value('select release_lock(?)', $lockName);
         }
     }
-    
-    /* transaction management 
+
+    /* transaction management
       As we can call JobExecutor::execute inside step functions we cannot commit there,
       but only release savepoint; so in general case inside function we don't know
       what we must do - start transaction or set savepoint? release savepoint or commit?
       rollback transaction or just rollback to savepoint?
     */
+    /** @var int */
     private $txnLevel=0;
+    /**
+     * @return int
+     */
     function getTxnLevel(){
        return $this->txnLevel;
     }
+    /**
+     * @return void
+     */
     function setSavepoint(){
-
         if($this->txnLevel==0){
             if($this->dbDriver == 'pgsql'){
                 $this->exec_query("begin transaction");
@@ -1057,6 +1325,9 @@ class JobExecutor extends sqlHelper{
         $this->txnLevel++;
     }
 
+    /**
+     * @return void
+     */
     function releaseSavepoint(){
         $level = $this->txnLevel;
         $this->txnLevel--;
@@ -1071,15 +1342,24 @@ class JobExecutor extends sqlHelper{
         }
     }
 
+    /**
+     * @return void
+     */
     function rollback(){
         $this->exec_query("rollback");
         $this->txnLevel=0;
     }
 
+    /**
+     * @return void
+     */
     function commit(){
         $this->exec_query("commit");
         $this->txnLevel=0;
     }
+    /**
+     * @return void
+     */
     function rollbackToSavepoint(){
         $this->txnLevel--;
         if($this->txnLevel<0){
@@ -1093,10 +1373,12 @@ class JobExecutor extends sqlHelper{
             $this->exec_query("rollback to savepoint job_exec_{$this->txnLevel}");
         }
     }
-
-
 }
 
+/**
+ @param array<mixed|array> $stacktrace
+ @return string
+ */
 function callStack($stacktrace) {
     $rv = "";
     foreach($stacktrace as $node) {
