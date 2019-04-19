@@ -266,7 +266,7 @@ $function$
         private $param;
         /** @var object $log */
         private $log;
-        /** @var callable(array<mixed>,array<mixed>,object):void */
+        /** @var callable(array<mixed,mixed>,array<mixed,mixed|array>,object):void */
         private $cb;
 
         /**
@@ -475,6 +475,7 @@ class JobExecutor extends sqlHelper{
      * @return int
      */
     function execute($jobName, $param, $ctx = [], $delay = 0, $depends_on = [], $dependants = []): int{
+      $param =[ '.parent_id' => $this->getCurrentJobId(), '.parent_step_id' => $this->getCurrentStepId() ] + $param;
       $logPrefix = 'JobExecutor#execute[pid=' . getmypid() . ']';
       $jobStepStartTs = date('Y-m-d H:i:s', time()+$delay);
 
@@ -577,8 +578,8 @@ class JobExecutor extends sqlHelper{
             return $jobId;
       }catch(Exception $e){
           $this->log->error(" $logPrefix <$jobName> Cannot store job into repository:" . $e->getMessage());
-          $this->exec_query("rollback");
-          throw new Exception("Cannot store $jobName into repository:" . $e->getMessage(), 0, $e);
+          $this->releaseSavepoint();
+          throw new JobSubmitException("Cannot store $jobName into repository:" . $e->getMessage(), 0, $e);
       }
     }
 
@@ -714,6 +715,28 @@ class JobExecutor extends sqlHelper{
         return $rv;
     }
 
+    /** @internal
+      * @param Job $job
+      * @param array<string,mixed> $decoded_param
+      * @param array<string,mixed> $decoded_val
+      * @param array<string,mixed> $r
+      * @param array<string,mixed>|object $rvOrEx
+      * @return void
+      */
+    function handleCb($job, $decoded_param, $decoded_val, $r, $rvOrEx=null){
+             if($job->getCb()){
+                   $this->log->trace("Run callback handler");
+                   $this->setSavepoint();
+                   try{
+                       $cb = $job->getCb();
+                       $cb($decoded_param, $decoded_val, $this, $r, $rvOrEx);
+                       $this->log->trace("Callback handler is done");
+                   }finally{
+                       $this->releaseSavepoint();
+                   }
+             }
+     }
+
     /**
      * @param string[]= $jobLike
      * @param callable():void= $callback
@@ -812,8 +835,8 @@ class JobExecutor extends sqlHelper{
 
               list($param, $val) = $this->fetch_list("select parameters, val from {$tp}job j where j.id=?", $r['job_id']);
               try{
-                 $decoded_param = json_decode($param,true);
-                 $decoded_val   = json_decode($val,true);
+                 $decoded_param = (array)json_decode($param,true);
+                 $decoded_val   = (array)json_decode($val,true);
                  if(!is_array($decoded_val)){
                     $decoded_val = [];
                  }
@@ -826,24 +849,14 @@ class JobExecutor extends sqlHelper{
                      throw new JobRunException("Context $val is not an array");
                  }
 
-                 if($job->getCb()){
-                       $this->log->trace("Run callback handler");
-                       $this->setSavepoint();
-                       try{
-                           $cb = $job->getCb();
-                           $cb((array)$decoded_param, (array)$decoded_val, $this);
-                           $this->log->trace("Callback handler is done");
-                       }finally{
-                           $this->releaseSavepoint();
-                       }
-                 }
-
 
                  $time = time();
                  $this->setCurrentJobId($r['job_id']);
                  $this->setCurrentStepId($r['id']);
                  $txnLevelBefore = $this->getTxnLevel();
+                 $this->handleCb($job, $decoded_param+['.state'=>'before'], $decoded_val,$r);
                  $rv = $fn((array)$decoded_param, $decoded_val, $this, $r);
+                 $this->handleCb($job, $decoded_param+['.state'=>'before'], $decoded_val,$r,$rv);
                  $txnLevelAfter = $this->getTxnLevel();
                  if($txnLevelBefore!=$txnLevelAfter){
                     $this->getLog()->warn("It seems job(id=%s, name=%s step=%s)  left non-released or non-rollbacked savepoint: before level $txnLevelBefore!=$txnLevelAfter",
@@ -943,6 +956,7 @@ class JobExecutor extends sqlHelper{
                  $this->rollbackToSavepoint();
                  $this->exec_query("update {$tp}job_step set is_failed=true where id=?", $r['id']);
                  $this->exec_query("update {$tp}job set last_error=?, is_failed=true where id=?", $e->getMessage(), $r['job_id']);
+                 $this->handleCb($job, $decoded_param+['.state'=>'exception'], $decoded_val,$r, $e);
                  $this->releaseSavepoint();
                  continue;
               }finally{
