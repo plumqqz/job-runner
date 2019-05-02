@@ -1060,6 +1060,7 @@ class JobExecutor extends sqlHelper{
                }
                if($rv instanceof Exception) throw $rv;
                $this->releaseSavepoint();
+               if($rv==JobExecutor::DELETE_CURRENT_JOB()) return;
                if(is_numeric($rv)){
                    $this->getLog()->info("testJob: timeout " . $rv);
                    sleep($rv);
@@ -1152,6 +1153,9 @@ class JobExecutor extends sqlHelper{
           }
         }
 
+        if(count($param)==1 && is_array($param[0]))
+            $param=$param[0];
+
         $sth = $dbh->prepare($qry);
         if(!$sth){
             $err = $dbh->errorInfo(); $err = $err[2];
@@ -1162,8 +1166,8 @@ class JobExecutor extends sqlHelper{
             $param=$param[0];
 
         if(!$sth->execute($param)){
-            $err = $sth->errorInfo(); $err = $err[2];
-            throw new \Exception("Cannot exec query:" . $err);
+            $err = $sth->errorInfo(); 
+            throw new \Exception("Cannot exec query[SQLSTATE:{$err[0]}]:" . $err[2]);
         }
 
         return $cb($sth);
