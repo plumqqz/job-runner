@@ -123,13 +123,13 @@ end;
 $function$
 
 */
-    class JobSubmitException extends Exception{};
-    class JobExecuteException extends Exception{};
-    class JobRunException extends Exception{};
-    class JobTxnLevelUnderflow extends Exception{};
-    class JobStressTestException extends Exception{};
-    class JobSqlException extends Exception{};
-    class JobDeleteException extends Exception{};
+    class JobSubmitException extends \Exception{};
+    class JobExecuteException extends \Exception{};
+    class JobRunException extends \Exception{};
+    class JobTxnLevelUnderflow extends \Exception{};
+    class JobStressTestException extends \Exception{};
+    class JobSqlException extends \Exception{};
+    class JobDeleteException extends \Exception{};
     class JobLogger{
        /** @var int */
        const PANIC = 0;
@@ -479,6 +479,13 @@ class JobExecutor extends sqlHelper{
       return $this->currentStepId;
     }
 
+    /**
+     * @return string
+     */
+    function getJobExecutorGlobalName(){
+      return getenv("JOB_MANAGER_LOGLVL") ?? gethostname();
+    }
+
 
     /**
      * Creates job executor object
@@ -503,7 +510,7 @@ class JobExecutor extends sqlHelper{
          $job->submit(function(array $param, array &$ctx, JobExecutor $je){
              try{
                  $je->execute(@$param['name'], @$param['param'], @$param['ctx'], @$param['delay']);
-             }catch(Exception $e){
+             }catch(\Exception $e){
                  $this->log->error("Internal executor: Cannot submit job {$param['name']} : {$e->getMessage()}");
              }
              return null;
@@ -638,7 +645,7 @@ class JobExecutor extends sqlHelper{
             $this->releaseSavepoint();
             $this->log->debug(" $logPrefix <$jobName> Stored into repository");
             return $jobId;
-      }catch(Exception $e){
+      }catch(\Exception $e){
           $this->log->error(" $logPrefix <$jobName> Cannot store job into repository:" . $e->getMessage());
           $this->releaseSavepoint();
           throw new JobSubmitException("Cannot store $jobName into repository:" . $e->getMessage(), 0, $e);
@@ -977,7 +984,7 @@ class JobExecutor extends sqlHelper{
                             }
                         }
                  }
-                 if(!$rv || $rv=='DONE' || is_numeric($rv) && $rv<0){
+                 if(!$rv || $rv=='STEP_DONE' || is_numeric($rv) && $rv<0){
                     $this->exec_query("delete from {$tp}job_step_depends_on where job_step_id=?", $r['id']);
                     $this->exec_query("delete from {$tp}job_step_depends_on where depends_on_step_id=?", $r['id']);
                     $this->exec_query("delete from {$tp}job_step where id=?", $r['id']);
@@ -1083,7 +1090,7 @@ class JobExecutor extends sqlHelper{
                   $this->releaseSavepoint();
                   break;
                }
-               if($rv instanceof Exception) throw $rv;
+               if($rv instanceof \Exception) throw $rv;
                $this->releaseSavepoint();
                if(is_numeric($rv)){
                    $this->getLog()->info("testJob: timeout " . $rv);
@@ -1114,14 +1121,14 @@ class JobExecutor extends sqlHelper{
                       $this->releaseSavepoint();
                       break;
                    }
-                   if($rv instanceof Exception) throw $rv;
+                   if($rv instanceof \Exception) throw $rv;
                    $this->releaseSavepoint();
                    $this->getLog()->info("testJob: timeout " . $rv);
                    sleep($rv);
                  }
              }
           }else{
-                 throw new Exception("Unknown step type in job");
+                 throw new \Exception("Unknown step type in job");
           }
         }
     }
@@ -1143,7 +1150,7 @@ class JobExecutor extends sqlHelper{
                   $this->releaseSavepoint();
                   break;
                }
-               if($rv instanceof Exception) throw $rv;
+               if($rv instanceof \Exception) throw $rv;
                $this->releaseSavepoint();
                if($rv==JobExecutor::DELETE_CURRENT_JOB()) return;
                if(is_numeric($rv)){
@@ -1163,11 +1170,11 @@ class JobExecutor extends sqlHelper{
                        $this->releaseSavepoint();
                      }
                 }else{
-                     throw new Exception("Unknown step type in job");
+                     throw new \Exception("Unknown step type in job");
                 }
              }
           }else{
-                 throw new Exception("Unknown step type in job");
+                 throw new \Exception("Unknown step type in job");
           }
         }
     }
