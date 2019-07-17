@@ -483,7 +483,7 @@ class JobExecutor extends sqlHelper{
      * @return string
      */
     function getJobExecutorGlobalName(){
-      return getenv("JOB_MANAGER_LOGLVL") ?? gethostname();
+      return getenv("JOB_MANAGER_GLOBAL_NAME") ? getenv("JOB_MANAGER_GLOBAL_NAME") : gethostname();
     }
 
 
@@ -957,7 +957,7 @@ class JobExecutor extends sqlHelper{
                  if(!@$decoded_val || !is_array(@$decoded_val)){
                       $decoded_val=[];
                  }
-                 $val = array_merge(@$val2,@$decoded_val);
+                 $val = array_merge(@$val2,array_filter(@$decoded_val, function($v){ return isset($v);}));
                  $val2 = json_encode($val);
 
                  if($this->dbDriver == 'pgsql'){
