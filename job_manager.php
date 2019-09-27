@@ -206,7 +206,7 @@ $function$
 
         /**
          * @param string $msg
-         * @param array|null $opt
+         * @param mixed[]|null $opt
          * @return void
          */
        function panic(string $msg, array $opt = null){
@@ -217,7 +217,7 @@ $function$
 
         /**
          * @param string $msg
-         * @param array|null $opt
+         * @param mixed[]|null $opt
          * @return void
          */
        function error(string $msg, array $opt = null){
@@ -228,7 +228,7 @@ $function$
 
         /**
          * @param string $msg
-         * @param array|null $opt
+         * @param mixed[]|null $opt
          * @return void
          */
        function warn(string $msg, array $opt = null){
@@ -239,7 +239,7 @@ $function$
 
         /**
          * @param string $msg
-         * @param array|null $opt
+         * @param mixed[]|null $opt
          * @return void
          */
        function info(string $msg, array $opt = null){
@@ -250,7 +250,7 @@ $function$
 
         /**
          * @param string $msg
-         * @param array|null $opt
+         * @param mixed[]|null $opt
          * @return void
          */
        function debug(string $msg, array $opt = null){
@@ -278,7 +278,7 @@ $function$
         private $name;
         /** @var object $log */
         private $log;
-        /** @var callable(array<mixed,mixed>,array<mixed,mixed|array>,object):void */
+        /** @var callable(JobExecutor,Job,array<string,mixed>,array<string,mixed>,array<string,mixed>|object):void */
         private $cb;
 
         /**
@@ -335,7 +335,7 @@ $function$
          *      $ctx - context of the job
          *      $result - it is result value of job step or Exception in case when job step will throw exception
          *
-         * @param callable(array<mixed>,array<mixed>,object):void $fn
+         * @param callable(JobExecutor,Job,array<string,mixed>,array<string,mixed>,array<string,mixed>|object):void $fn
          * @return void
          * @throws JobSubmitException
          */
@@ -345,7 +345,7 @@ $function$
 
         /**
          * @see setCallback
-         * @param callable(array,array,object):void $fn
+         * @param callable(JobExecutor,Job,array<string,mixed>,array<string,mixed>,array<string,mixed>|object):void $fn
          * @return void
          * @throws JobSubmitException
          */
@@ -357,7 +357,7 @@ $function$
         }
         /**
          * @see setCallback
-         * @return callable(array,array,object):void $fn
+         * @return callable(JobExecutor,Job,array<string,mixed>,array<string,mixed>,array<string,mixed>|object):void
          */
         function getCb(){
             return $this->cb;
@@ -483,7 +483,18 @@ class JobExecutor extends sqlHelper{
      * @return string
      */
     function getJobExecutorGlobalName(){
-      return getenv("JOB_MANAGER_GLOBAL_NAME") ? getenv("JOB_MANAGER_GLOBAL_NAME") : gethostname();
+      return getenv("JOB_MANAGER_GLOBAL_NAME") ?: gethostname();
+    }
+
+    /**
+     * @return void
+     */
+    function moveBackOneStep(){
+      $tp = $this->tp;
+      $rc = $this->execQuery("insert into {$tp}job_step(job_id,pos,is_failed,run_once,run_after)
+                        select t.job_id, t.pos-1, false, false, now() from (select job_id, pos from {$tp}job_step where job_id=? order by pos limit 1) t where t.pos>0",
+                        $this->getCurrentJobId()
+                    );
     }
 
 
@@ -756,7 +767,7 @@ class JobExecutor extends sqlHelper{
      */
     function cleanUp(){
         $tp = $this->tp;
-        $this->exec_query("delete from {$tp}job where not exists(select * from {$tp}job_step js where job.id=js.job_id) and job.is_done");
+        $this->exec_query("delete from {$tp}job where not exists(select * from {$tp}job_step js where job.id=js.job_id) and job.is_done and last_step_finished_at<now()-make_interval(mins:=45)");
         $this->exec_query("delete from {$tp}job_step_depends_on where not exists(select * from {$tp}job_step js where js.id=job_step_depends_on.job_step_id)");
         $this->exec_query("delete from {$tp}job_step_depends_on where not exists(select * from {$tp}job_step js where js.id=job_step_depends_on.depends_on_step_id)");
     }
@@ -803,15 +814,21 @@ class JobExecutor extends sqlHelper{
      * @internal
      */
     function handleCb($job, $decoded_param, $decoded_val, $rvOrEx=null){
+        $done = false;
              if($job->getCb()){
                    $this->log->trace("Run callback handler");
                    $this->setSavepoint();
                    try{
                        $cb = $job->getCb();
+                       /* callable(JobExecutor,Job,array<string,mixed>,array<string,mixed>,array<string,mixed>|object) */
                        $cb($this, $job, $decoded_param, $decoded_val, $rvOrEx);
+                       $done = true;
                        $this->log->trace("Callback handler is done");
                    }finally{
-                       $this->releaseSavepoint();
+                       if($done)
+                           $this->releaseSavepoint();
+                       else
+                           $this->rollbackToSavepoint();
                    }
              }
      }
@@ -832,7 +849,7 @@ class JobExecutor extends sqlHelper{
         $toSleep = 0;
         while(1){
            $rs = $this->fetch_query("
-                        select j1.*, j.name,
+                        select j1.*, j.name,md5(j.val) as md5val,
                           case when exists(select * from {$tp}job_step_depends_on jsd, {$tp}job_step js1 where jsd.job_step_id=js1.id and js1.job_id=j.id and jsd.depends_on_step_id=j1.id)
                                  or exists(select * from {$tp}job_step js where js.job_id=j.id and js.id<>j1.id)
                                  then 0 else 1 end as last_step
@@ -850,7 +867,7 @@ class JobExecutor extends sqlHelper{
            if(!$rs){
                 if($callback) $callback();
                 $this->log->debug(" $logPrefix No data, going to sleep and continue");
-                $toSleep = $toSleep > 5 ? 5 : $toSleep+0.2;
+                $toSleep = $toSleep > 5 ? 5 : $toSleep+=0.2;
                 usleep($toSleep*1000000);
                 continue;
            }
@@ -869,6 +886,15 @@ class JobExecutor extends sqlHelper{
               if(!$lock){
                 $this->log->debug(" $logPrefix Record already locked by other process; will continue");
                 $this->releaseSavepoint();
+                usleep(0.1*1000000);
+                continue;
+              }
+              if($r['md5val']!=$this->fetchValue("select md5(j.val) from {$tp}job j, {$tp}job_step js
+                                    where j.id=js.job_id and j.id=? and js.id=? and not j.is_done and not j.is_failed
+                                      and not js.is_failed and js.run_after<=now() for update", $r['job_id'], $r['id'])){
+                $this->log->info(" $logPrefix Record already processed by other process; will continue");
+                $this->releaseSavepoint();
+                usleep(0.1*1000000);
                 continue;
               }
               $this->log->debug(" $logPrefix record locked");
@@ -957,6 +983,10 @@ class JobExecutor extends sqlHelper{
                  if(!@$decoded_val || !is_array(@$decoded_val)){
                       $decoded_val=[];
                  }
+                 /**
+                  * @param mixed|null $v
+                  * @return bool 
+                  */
                  $val = array_merge(@$val2,array_filter(@$decoded_val, function($v){ return isset($v);}));
                  $val2 = json_encode($val);
 
@@ -1035,15 +1065,14 @@ class JobExecutor extends sqlHelper{
                     $this->rollbackToSavepoint();
                     continue;
                  }
-                 $this->log->debug(" $logPrefix <{$job->getName()}> Step #{$r['pos']} throws exception " . get_class($e) . ' with message ' . $e->getMessage());
                  $this->log->info(" $logPrefix <{$job->getName()}> Got exception:" . $e->getMessage());
                  $this->log->trace("rollback to savepoint");
                  $this->rollbackToSavepoint();
+                 $this->handleCb($job, $decoded_param+['.state'=>'exception'], $decoded_val, $e);
                  $this->exec_query("update {$tp}job_step set is_failed=true where id=?", $r['id']);
                  $this->exec_query("update {$tp}job set last_error=?, is_failed=true where id=?", $e->getMessage(), $r['job_id']);
                   /** @noinspection PhpUndefinedVariableInspection */
                   /** @noinspection PhpUndefinedVariableInspection */
-                  $this->handleCb($job, $decoded_param+['.state'=>'exception'], $decoded_val, $e);
                  $this->releaseSavepoint();
                  continue;
               }finally{
